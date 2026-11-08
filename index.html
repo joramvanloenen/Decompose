@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#07120d">
+<title>DECOMPOSE — An art of unmaking</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+<header><div class="title"><span class="rune">✳</span><div><h1>DECOMPOSE</h1><small>AN ART OF UNMAKING</small></div></div>
+<div class="meters"><div><small>HARVESTED ESSENCE</small><strong id="essence">00000</strong></div><div><small>SOUL INTEGRITY</small><div class="health"><i id="healthBar"></i></div></div></div>
+<button id="helpBtn" aria-label="Instructions">?</button></header>
+<section class="play">
+<div class="frame" id="frame">
+<canvas id="game" width="236" height="204" aria-label="Corpse extraction scene"></canvas>
+<div class="scanlines"></div><div class="vignette"></div>
+<div id="loading">SUMMONING REMAINS_</div>
+<div class="corner tl"><span class="violet">●</span> SUBJECT 001 · UNKNOWN</div>
+<div class="corner tr" id="status">EXTRACTION READY</div>
+<div class="hint" id="hint">HOLD & DRAG TO EXTRACT ✦ FOLLOW THE VIOLET LIGHT</div>
+</div>
+<div class="controls"><button id="panLeft" class="pan">‹ &nbsp; LEFT</button>
+<div class="center"><small>POSITION ALONG REMAINS</small><div class="ruler"><i id="position"></i></div><span id="layerName">OUTER FLESH</span></div>
+<button id="panRight" class="pan">RIGHT &nbsp; ›</button></div>
+</section>
+<footer><span>✦ CHANNEL NECROTIC ENERGY THROUGH YOUR HAND</span><span id="harvest">0 PIXELS HARVESTED</span><button id="restart">↺ RECONSTITUTE</button></footer>
+<dialog id="instructions"><button id="closeHelp" class="close">×</button><h2>THE ART OF UNMAKING</h2>
+<p>A corpse is a library. Read it with your fingertips.</p>
+<p><b>HOLD + DRAG</b> over the corpse. Each pixel first glows <em>bright violet</em> while still attached, then detaches as a <em>deep-purple</em> fragment pulled toward the hand.</p>
+<p>Only the topmost material can be removed. Reveal <b>flesh → cloth → dried remains → skeleton</b>. The green background is never destroyed.</p>
+<p>Pan using the bottom arrows (or keyboard arrow keys). Beware pulsing corruption hidden beneath the flesh.</p>
+<button id="begin">BEGIN THE HARVEST</button></dialog>
+</main><script src="main.js"></script></body></html>
