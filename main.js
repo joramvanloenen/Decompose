@@ -9,7 +9,7 @@ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function load(url){return new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=()=>reject(new Error(url));i.src=url})}
 async function init(){
  try{
- const imgs=await Promise.all(['assets/Coprse_BG.jpg',...filenames.map(n=>'assets/'+n)].map(load));
+ const imgs=await Promise.all(['assets/Coprse_BG.png',...filenames.map(n=>'assets/'+n)].map(load));
  background=imgs[0];
  for(let k=0;k<4;k++){
  const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(imgs[k+1],0,0);
