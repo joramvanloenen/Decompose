@@ -4,7 +4,7 @@
   // All original PNGs share one pixel grid. The camera moves; the images never do.
   const W = 364, H = 204, VW = 236, PIXELS = W * H;
   // Invisible, fixed long-range absorption field. Only its intensity pulses.
-  const EXTRACTION_RADIUS = 150;
+  const EXTRACTION_RADIUS = 70;
   function powerPulse() { return .5 + .5 * Math.sin(nowTime * .010); }
   function powerRadius() { return EXTRACTION_RADIUS; }
   const NAMES = ['OUTER FLESH', 'FUNERAL CLOTH', 'DRIED REMAINS', 'ANCIENT BONES'];
@@ -714,8 +714,10 @@
       p.age += dt;
       const dx = tx - p.x, dy = ty - p.y;
       const distance = Math.hypot(dx, dy);
-      if (distance < 4) {
-        // Only actual arrival at the hand counts toward local unlocking.
+      const channeling = hold && distance <= powerRadius();
+      // No magnetic influence or collection from hovering, including when
+      // a free pixel crosses the hand's location.
+      if (channeling && distance < 4 && (!p.ash || p.age >= p.ashDuration)) {
         layers[p.k].unabsorbed--;
         layers[p.k].absorbed[p.sourceN] = 1;
         harvest++;
@@ -724,25 +726,32 @@
         particles.splice(i, 1);
         continue;
       }
-      // Some real pixels become almost weightless ash. They rise against
-      // gravity, coherently wander through a slowly changing noise field,
-      // then yield to the magical attraction. They are never thrown away:
-      // only arrival at the hand counts as absorbed.
-      if (p.ash && p.age < p.ashDuration) {
+      // Free pixels continue in slow turbulence when not pressing, or
+      // outside the field. Ash keeps its weightless rising phase.
+      const floatingAsh = p.ash && p.age < p.ashDuration;
+      if (!channeling || floatingAsh) {
         const wind = ashTurbulence(p.x, p.y, nowTime, p.seed);
-        const drag = Math.pow(.91, step);
-        p.vx = p.vx * drag + (wind.x * .07 + Math.sin(p.age * .007 + p.seed) * .018) * step;
-        p.vy = p.vy * drag + (-.046 + wind.y * .025) * step;
+        const drag = Math.pow(floatingAsh ? .91 : .85, step);
+        const gust = floatingAsh ? .075 : .03;
+        p.vx = p.vx * drag + (wind.x * gust +
+          Math.sin(p.age * .007 + p.seed) * (floatingAsh ? .018 : .008)) * step;
+        p.vy = p.vy * drag + ((floatingAsh ? -.046 : -.012) +
+          wind.y * (floatingAsh ? .025 : .013)) * step;
         const speed = Math.hypot(p.vx, p.vy);
-        if (speed > 1.25) { p.vx *= 1.25 / speed; p.vy *= 1.25 / speed; }
-        p.x += p.vx * step;
-        p.y += p.vy * step;
+        const maxSpeed = floatingAsh ? 1.25 : 3.4;
+        if (speed > maxSpeed) { p.vx *= maxSpeed / speed; p.vy *= maxSpeed / speed; }
+        // Keep abandoned source pixels recoverable within the world.
+        const nextX = p.x + p.vx * step, nextY = p.y + p.vy * step;
+        p.x = clamp(nextX, 1, W - 2);
+        p.y = clamp(nextY, 1, H - 2);
+        if (p.x !== nextX) p.vx = 0;
+        if (p.y !== nextY) p.vy = 0;
         p.trail.unshift({ x: p.x, y: p.y });
-        if (p.trail.length > 3) p.trail.pop();
+        if (p.trail.length > (floatingAsh ? 3 : 4)) p.trail.pop();
         continue;
       }
-      // When the ash phase ends, the particle becomes part of the purple
-      // siphon. Normal released pixels use the familiar swirling flame pull.
+      // While pressing and in range, released pixels follow the original
+      // turbulent flame attraction. Ash joins after its weightless phase.
       const nx = dx / distance, ny = dy / distance;
       const surge = powerPulse();
       const pull = .25 + .72 * (1 - Math.exp(-p.age / 210)) + 12 / (distance + 24) + .45 * surge;
@@ -776,11 +785,12 @@
       s.age += dt;
       const dx = tx - s.x, dy = ty - s.y;
       const distance = Math.hypot(dx, dy);
-      if (s.age >= s.life || distance < 3) { flameSparks.splice(i, 1); continue; }
+      if (s.age >= s.life || (hold && distance < 3)) { flameSparks.splice(i, 1); continue; }
+      const attracting = hold && distance <= powerRadius() && distance > .001;
       const drag = Math.pow(.93, step);
-      s.vx = s.vx * drag + (dx / distance * .07 +
+      s.vx = s.vx * drag + ((attracting ? dx / distance * .07 : 0) +
         Math.sin(s.age * .03 + s.seed) * .1) * step;
-      s.vy = s.vy * drag + (dy / distance * .07 - .06) * step;
+      s.vy = s.vy * drag + ((attracting ? dy / distance * .07 : 0) - .06) * step;
       s.x += s.vx * step; s.y += s.vy * step;
     }
   }
