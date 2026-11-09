@@ -3,10 +3,10 @@
 
   // All original PNGs share one pixel grid. The camera moves; the images never do.
   const W = 364, H = 204, VW = 236, PIXELS = W * H;
-  // A breathing extraction field, approximately 44–51 source pixels in radius.
-  const EXTRACTION_RADIUS = 46;
+  // Invisible, fixed long-range absorption field. Only its intensity pulses.
+  const EXTRACTION_RADIUS = 150;
   function powerPulse() { return .5 + .5 * Math.sin(nowTime * .010); }
-  function powerRadius() { return EXTRACTION_RADIUS * (.95 + .16 * powerPulse()); }
+  function powerRadius() { return EXTRACTION_RADIUS; }
   const NAMES = ['OUTER FLESH', 'FUNERAL CLOTH', 'DRIED REMAINS', 'ANCIENT BONES'];
   const FILES = ['Coprse01_alive.png', 'Coprse02_Cloth.png', 'Coprse03_Dried.png', 'Coprse04_Skeleton.png'];
   const $ = id => document.getElementById(id);
@@ -259,10 +259,13 @@
   function gather(dt) {
     if (!hold || !loaded) return;
     const cx = hand.x + cam, cy = hand.y;
-    const count = Math.max(34, Math.round(dt * 4.8));
+    // Sample nearby material densely and distant material throughout the full field.
+    const count = Math.max(96, Math.round(dt * 12));
     const radius = powerRadius();
     for (let n = 0; n < count; n++) {
-      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * radius;
+      const a = Math.random() * Math.PI * 2;
+      const sampleRadius = n % 5 < 2 ? 50 : radius;
+      const r = Math.sqrt(Math.random()) * sampleRadius;
       const m = materialAt(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
       if (!m) continue;
       const key = chargeKey(m);
@@ -614,7 +617,7 @@
   function drawHand() {
     if (!hover && !hold) return;
     const x = Math.round(hand.x), y = Math.round(hand.y);
-    g.save(); g.translate(x, y); g.shadowBlur = hold ? 19 : 4; g.shadowColor = '#c644ff';
+    g.save(); g.translate(x, y); g.shadowBlur = hold ? 12 + 10 * powerPulse() : 4; g.shadowColor = '#c644ff';
     g.fillStyle = '#14221b'; g.fillRect(4, 12, 9, 12); g.fillRect(-7, 6, 15, 11);
     g.fillStyle = '#536c61'; g.fillRect(-7, 7, 14, 9); g.fillRect(-3, 1, 9, 12); g.fillRect(3, 13, 9, 10);
     g.fillStyle = '#acc1a8'; g.fillRect(-6, 4, 11, 4); g.fillRect(-4, 0, 8, 4);
@@ -625,27 +628,6 @@
       g.fillStyle = hold ? '#da71fa' : '#819d90'; g.fillRect(px, py - 11, 2, 2);
     }
     g.fillStyle = '#8d45b6'; g.fillRect(-8, -2, 3, 5);
-    if (hold) {
-      const pulse = powerPulse(), radius = powerRadius();
-      g.strokeStyle = '#bb46ef'; g.lineWidth = 1;
-      g.globalAlpha = .3 + .35 * pulse;
-      g.beginPath(); g.arc(0, -1, radius, 0, Math.PI * 2); g.stroke();
-      g.globalAlpha = .28 + .28 * (1 - pulse);
-      g.beginPath(); g.arc(0, -1, radius * (.72 + .06 * pulse), 0, Math.PI * 2); g.stroke();
-      g.globalAlpha = .7;
-      g.beginPath();
-      g.arc(0, -1, radius + 3, nowTime * .003, nowTime * .003 + 1.2); g.stroke();
-      g.beginPath();
-      g.arc(0, -1, radius + 3, nowTime * -.002 + 2.3, nowTime * -.002 + 3.3); g.stroke();
-      for (let i = 0; i < 11; i++) {
-        const a = nowTime * (.0015 + i % 3 * .0007) + i * 2.4;
-        const r = radius * (.64 + .42 * (i % 4) / 3);
-        g.globalAlpha = .4 + .5 * pulse;
-        g.fillStyle = i % 3 ? '#a63cff' : '#f5b0ff';
-        g.fillRect(Math.round(Math.cos(a) * r), Math.round(Math.sin(a) * r) - 2, 2, 2);
-      }
-      g.globalAlpha = 1;
-    }
     g.restore();
   }
 
