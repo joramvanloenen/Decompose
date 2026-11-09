@@ -17,7 +17,7 @@
   const MAX_FLAME_SPARKS = 520;
   const MAX_SUCTION_PARTICLES = 1500;
   const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
-  let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W);
+  let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W), groundY = -1;
   let background, cam = 0, wantCam = 0, hand = { x: VW / 2, y: 120 };
   let hold = false, hover = false, pan = 0, energy = 0, harvest = 0, taint = 0;
   let nowTime = 0, previous = performance.now(), connectivityClock = 0, needConnectivity = new Set();
@@ -51,25 +51,24 @@
     return { surface, context, pixels, original, absorbed: new Uint8Array(PIXELS), image, remaining, unabsorbed: remaining, dirty: false };
   }
 
-  // The skeleton's original bottommost pixel at each X defines a permanent
-  // support surface. Use the nearest bone column for transparent gaps.
+  // A SINGLE horizontal ground line: the lowest row containing any
+  // non-transparent pixel in the ORIGINAL skeleton image. It stays fixed
+  // even after the skeleton is harvested. Never sample individual columns.
   function buildGround() {
     const bone = layers[3].original;
-    for (let x = 0; x < W; x++) {
-      let bottom = -1;
-      for (let y = H - 1; y >= 0; y--) {
-        if (bone[y * W + x]) { bottom = y; break; }
+    groundY = -1;
+    for (let y = H - 1; y >= 0 && groundY < 0; y--) {
+      const first = y * W;
+      for (let x = 0; x < W; x++) {
+        if (bone[first + x]) { groundY = y; break; }
       }
-      ground[x] = bottom;
     }
-    for (let x = 0; x < W; x++) {
-      if (ground[x] >= 0) continue;
-      let a = x - 1, b = x + 1;
-      while (a >= 0 && ground[a] < 0) a--;
-      while (b < W && ground[b] < 0) b++;
-      ground[x] = a < 0 ? (b < W ? ground[b] : 158)
-        : b >= W ? ground[a] : (x - a <= b - x ? ground[a] : ground[b]);
+    if (groundY < 0) {
+      console.warn('Skeleton PNG has no opaque pixels; using scene boundary.');
+      groundY = H - 1;
     }
+    // Preserve the existing diagnostic array, now a uniform flat floor.
+    ground.fill(groundY);
   }
 
   async function init() {
@@ -482,14 +481,13 @@
   }
 
   function floorLimit(d) {
-    // The skeleton's original lowest pixel in each column is the collider.
-    let maxY = H;
+    // Collide the lowest surviving pixel of each fragment with the fixed
+    // horizontal skeleton baseline (one row above it is the final position).
+    let lowest = -1;
     for (let x = 0; x < d.w; x++) {
-      if (d.profile[x] < 0) continue;
-      const worldX = clamp(Math.round(d.x) + x, 0, W - 1);
-      maxY = Math.min(maxY, ground[worldX] - d.profile[x] - 1);
+      if (d.profile[x] > lowest) lowest = d.profile[x];
     }
-    return maxY;
+    return lowest < 0 ? d.y : groundY - lowest - 1;
   }
 
   function moveDebris(dt) {
@@ -504,14 +502,11 @@
         d.x = clamp(d.x + d.vx * seconds, 0, Math.max(0, W - d.w));
         const previousY = d.y;
         const nextY = previousY + d.vy * seconds;
-        const boneFloor = floorLimit(d);
-        // A piece may ALREADY overlap the height field where it detaches.
-        // Old code forced y=boneFloor and visibly launched pieces UPWARD.
-        // Use scene floor for such pieces and never permit negative motion.
-        const bottom = Math.max(...d.profile);
-        const sceneFloor = Math.max(d.spawnY + 2, H - 1 - bottom);
-        const contactY = boneFloor < d.spawnY + 1 ? sceneFloor : boneFloor;
-        if (nextY >= contactY) {
+        const contactY = floorLimit(d);
+        // If detached tissue already touches/overlaps the flat line, it
+        // settles immediately in place. Never lift it and NEVER allow it
+        // to fall through to the bottom of the screen.
+        if (previousY >= contactY || nextY >= contactY) {
           d.y = Math.max(previousY, contactY);
           d.vy = d.vx = 0;
           d.settled = true;
@@ -744,7 +739,7 @@
   if (new URLSearchParams(location.search).has('debug')) {
     window.__DECOMPOSE_DEBUG__ = {
       get ready() { return loaded; }, get layers() { return layers; }, get debris() { return debris; },
-      get ground() { return ground; }, get particles() { return particles; },
+      get ground() { return ground; }, get groundY() { return groundY; }, get particles() { return particles; },
       get powerRadius() { return powerRadius(); },
       get flameSparks() { return flameSparks; },
       locallyClear, topPixel, materialAt, boneUnlocked, detachIslands,
