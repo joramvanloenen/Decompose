@@ -3,6 +3,8 @@
 
   // All original PNGs share one pixel grid. The camera moves; the images never do.
   const W = 364, H = 204, VW = 236, PIXELS = W * H;
+  // One radius drives detection, charged-pixel range and the visible magic field.
+  const EXTRACTION_RADIUS = 25;
   const NAMES = ['OUTER FLESH', 'FUNERAL CLOTH', 'DRIED REMAINS', 'ANCIENT BONES'];
   const FILES = ['Coprse01_alive.png', 'Coprse02_Cloth.png', 'Coprse03_Dried.png', 'Coprse04_Skeleton.png'];
   const $ = id => document.getElementById(id);
@@ -228,9 +230,9 @@
   function gather(dt) {
     if (!hold || !loaded) return;
     const cx = hand.x + cam, cy = hand.y;
-    const count = Math.max(9, Math.round(dt * 1.35));
+    const count = Math.max(20, Math.round(dt * 3.2));
     for (let n = 0; n < count; n++) {
-      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 9;
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * EXTRACTION_RADIUS;
       const m = materialAt(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
       if (!m) continue;
       const key = chargeKey(m);
@@ -253,7 +255,7 @@
         charges.delete(key); continue;
       }
       const distance = Math.hypot(world.x - hand.x - cam, world.y - hand.y);
-      if (!hold || distance > 14) {
+      if (!hold || distance > EXTRACTION_RADIUS + 1.5) {
         p.phase -= dt * .008;
         if (p.phase <= 0) charges.delete(key);
         continue;
@@ -503,11 +505,11 @@
     g.fillStyle = '#8d45b6'; g.fillRect(-8, -2, 3, 5);
     if (hold) {
       g.strokeStyle = '#c454ff'; g.lineWidth = 1; g.beginPath();
-      g.arc(0, -1, 10 + Math.sin(nowTime * .009) * .6, 0, Math.PI * 2); g.stroke();
+      g.arc(0, -1, EXTRACTION_RADIUS + Math.sin(nowTime * .009) * 1.1, 0, Math.PI * 2); g.stroke();
       for (let i = 0; i < 5; i++) {
         const a = nowTime * .003 + i * 1.256;
         g.fillStyle = i % 2 ? '#e3afff' : '#aa37ef';
-        g.fillRect(Math.cos(a) * 13 | 0, Math.sin(a) * 13 - 2 | 0, 2, 2);
+        g.fillRect(Math.cos(a) * (EXTRACTION_RADIUS + 3) | 0, Math.sin(a) * (EXTRACTION_RADIUS + 3) - 2 | 0, 2, 2);
       }
     }
     g.restore();
