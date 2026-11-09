@@ -16,6 +16,9 @@
   const layers = [], charges = new Map(), particles = [], debris = [], dust = [], flameSparks = [];
   const MAX_FLAME_SPARKS = 520;
   const MAX_SUCTION_PARTICLES = 1500;
+  const MAX_FALLING_CHUNK_PIXELS = 112;
+  const MAX_FALLING_CHUNK_SPAN = 32;
+  const MAX_DEBRIS_CHUNKS = 200;
   const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
   let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W), groundY = -1;
   let background, cam = 0, wantCam = 0, hand = { x: VW / 2, y: 120 };
@@ -315,10 +318,9 @@
     }
   }
 
-  // 8-neighbour flood fill: diagonally connected pixel art remains joined.
-  // Only components severed from the largest surviving body component fall.
-  // A severed connected island becomes a SINGLE rigid falling sprite instead
-  // of artificially dissolving all its pixels into unrelated particles.
+  // Only SMALL severed components may fall. Broad or long sections remain
+  // attached to the original sprite until further disassembly reduces them.
+  // Eight-neighbour connectivity preserves diagonal pixel-art connections.
   function detachIslands(k) {
     const l = layers[k];
     const comps = [];
@@ -347,6 +349,15 @@
     for (let i = 1; i < comps.length; i++) {
       const cells = comps[i];
       if (cells.length < 4 && cells.every(n => isolatedOriginal[k]?.has(n))) continue;
+      if (cells.length > MAX_FALLING_CHUNK_PIXELS || debris.length >= MAX_DEBRIS_CHUNKS) continue;
+      let minX = W, minY = H, maxX = 0, maxY = 0;
+      for (const n of cells) {
+        const x = n % W, y = (n / W) | 0;
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+      if (maxX - minX + 1 > MAX_FALLING_CHUNK_SPAN ||
+          maxY - minY + 1 > MAX_FALLING_CHUNK_SPAN) continue;
       makeDebris(k, cells);
     }
   }
@@ -402,7 +413,8 @@
       w, h, surface, context, pixels: data.data, originalPixels: new Uint8ClampedArray(data.data),
       remaining: cells.length, active, slot, vx: (Math.random() - .5) * 3,
       vy: 0, settled: false, dirty: true, profileDirty: true, profile: [],
-      fallAge: 0, aftershock: 0, shedAccumulator: 0, tint: 0, tintClock: 0 };
+      fallAge: 0, impactAt: -1, splitDepth: 0, aftershock: 0,
+      shedAccumulator: 0, tint: 0, tintClock: 0 };
     debris.push(d);
     layers[k].remaining -= cells.length;
     layers[k].dirty = true;
@@ -452,20 +464,24 @@
     }
   }
 
+  // A short violet FLASH on detachment and impact, never a permanent tint.
+  // Restore the pixel RGB from the exact source art after the glow fades.
   function tintDebris(d, dt) {
     d.tintClock += dt;
-    const target = d.settled ? .9 : Math.min(.88, d.fallAge / 600 * .88);
-    // Even a tiny piece that drops only a few pixels flashes violet on impact.
-    if ((d.tintClock < 52 && !(d.settled && d.tint < .85)) ||
-        target - d.tint < .045) return;
+    const detachFlash = Math.max(0, 1 - d.fallAge / 390) * .82;
+    const impactFlash = d.impactAt < 0 ? 0 :
+      Math.max(0, 1 - (d.fallAge - d.impactAt) / 250) * .62;
+    const target = Math.max(detachFlash, impactFlash);
+    if (Math.abs(target - d.tint) < .025 && !(target === 0 && d.tint > 0)) return;
+    if (d.tintClock < 33 && target > .02) return;
     d.tintClock = 0;
     d.tint = target;
     for (const cell of d.active) {
       const i = cell * 4, m = target;
-      const r = d.originalPixels[i], gr = d.originalPixels[i + 1], b = d.originalPixels[i + 2];
-      d.pixels[i] = r * (1 - m) + 147 * m;
-      d.pixels[i + 1] = gr * (1 - m) + 32 * m;
-      d.pixels[i + 2] = b * (1 - m) + 206 * m;
+      const r = d.originalPixels[i], green = d.originalPixels[i + 1], blue = d.originalPixels[i + 2];
+      d.pixels[i] = Math.round(r * (1 - m) + 185 * m);
+      d.pixels[i + 1] = Math.round(green * (1 - m) + 57 * m);
+      d.pixels[i + 2] = Math.round(blue * (1 - m) + 246 * m);
     }
     d.dirty = true;
   }
@@ -490,6 +506,109 @@
     return lowest < 0 ? d.y : groundY - lowest - 1;
   }
 
+  // On impact, split a falling fragment into several small, contiguous
+  // pieces using multi-source 8-neighbour flood fill. These pieces spread
+  // slightly and settle again under gravity. No source pixel is duplicated,
+  // destroyed or prematurely counted as absorbed.
+  function splitDebrisOnImpact(d, debrisIndex) {
+    if (d.splitDepth !== 0 || d.remaining < 9 || debris.length >= MAX_DEBRIS_CHUNKS - 7) return false;
+    const pieces = Math.min(6, Math.max(2, Math.floor(d.remaining / 15)));
+    const seeds = [d.active[(Math.random() * d.active.length) | 0]];
+    while (seeds.length < pieces) {
+      let farthest = -1, best = -1;
+      for (const cell of d.active) {
+        if (seeds.includes(cell)) continue;
+        const x = cell % d.w, y = (cell / d.w) | 0;
+        let distance = Infinity;
+        for (const seed of seeds) {
+          const sx = seed % d.w, sy = (seed / d.w) | 0;
+          distance = Math.min(distance, (x - sx) ** 2 + (y - sy) ** 2);
+        }
+        if (distance > farthest) { farthest = distance; best = cell; }
+      }
+      if (best < 0) break;
+      seeds.push(best);
+    }
+    if (seeds.length < 2) return false;
+    const owner = new Int16Array(d.w * d.h).fill(-1);
+    const groups = seeds.map(() => []);
+    const frontier = [];
+    for (let i = 0; i < seeds.length; i++) {
+      owner[seeds[i]] = i;
+      frontier.push(seeds[i]);
+    }
+    for (let head = 0; head < frontier.length; head++) {
+      const cell = frontier[head], group = owner[cell];
+      groups[group].push(cell);
+      const x = cell % d.w, y = (cell / d.w) | 0;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(d.h - 1, y + 1); yy++) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(d.w - 1, x + 1); xx++) {
+          const next = yy * d.w + xx;
+          if (owner[next] !== -1 || d.slot[next] < 0) continue;
+          owner[next] = group;
+          frontier.push(next);
+        }
+      }
+    }
+    // A partially harvested parent may already contain isolated specks.
+    // Assign these too, without dropping or duplicating their source pixels.
+    for (const cell of d.active) {
+      if (owner[cell] >= 0) continue;
+      const x = cell % d.w, y = (cell / d.w) | 0;
+      let nearest = 0, best = Infinity;
+      for (let i = 0; i < seeds.length; i++) {
+        const sx = seeds[i] % d.w, sy = (seeds[i] / d.w) | 0;
+        const dst = (x - sx) ** 2 + (y - sy) ** 2;
+        if (dst < best) { best = dst; nearest = i; }
+      }
+      groups[nearest].push(cell);
+    }
+    const shards = [];
+    for (const cells of groups) {
+      if (!cells.length) continue;
+      let minX = d.w, minY = d.h, maxX = 0, maxY = 0;
+      for (const cell of cells) {
+        const x = cell % d.w, y = (cell / d.w) | 0;
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+      }
+      const w = maxX - minX + 1, h = maxY - minY + 1;
+      const surface = createCanvas(w, h), context = surface.getContext('2d');
+      const data = context.createImageData(w, h);
+      const active = [], slot = new Int32Array(w * h).fill(-1);
+      for (const cell of cells) {
+        const x = cell % d.w - minX, y = ((cell / d.w) | 0) - minY;
+        const at = y * w + x, src = cell * 4, dest = at * 4;
+        data.data[dest] = d.originalPixels[src];
+        data.data[dest + 1] = d.originalPixels[src + 1];
+        data.data[dest + 2] = d.originalPixels[src + 2];
+        data.data[dest + 3] = d.originalPixels[src + 3];
+        slot[at] = active.length;
+        active.push(at);
+      }
+      const center = (minX + maxX) / 2;
+      const side = center < d.w / 2 ? -1 : 1;
+      shards.push({
+        id: ++chunkId, layer: d.layer,
+        x: d.x + minX, y: d.y + minY,
+        sourceX: d.sourceX + minX, sourceY: d.sourceY + minY,
+        spawnY: d.y + minY, w, h, surface, context,
+        pixels: data.data, originalPixels: new Uint8ClampedArray(data.data),
+        remaining: active.length, active, slot,
+        vx: side * (8 + Math.random() * 13), vy: 0,
+        settled: false, dirty: true, profileDirty: true, profile: [],
+        fallAge: 0, impactAt: -1, splitDepth: d.splitDepth + 1,
+        aftershock: 0, shedAccumulator: 0, tint: 0, tintClock: 0
+      });
+    }
+    if (shards.length < 2) return false;
+    // Pending extractions refer to old chunk-local coordinates. Reacquire
+    // them on the next frame using the new shards' own coordinate systems.
+    for (const [key, charge] of charges) if (charge.chunk === d) charges.delete(key);
+    debris.splice(debrisIndex, 1, ...shards);
+    return true;
+  }
+
   function moveDebris(dt) {
     const seconds = dt / 1000;
     for (let i = debris.length - 1; i >= 0; i--) {
@@ -510,7 +629,9 @@
           d.y = Math.max(previousY, contactY);
           d.vy = d.vx = 0;
           d.settled = true;
+          d.impactAt = d.fallAge;
           d.aftershock = 0;
+          if (splitDebrisOnImpact(d, i)) continue;
           crumbleDebris(d, Math.min(72, Math.ceil(d.remaining * (.12 + Math.random() * .07))));
         } else {
           d.y = nextY;
@@ -743,6 +864,7 @@
       get powerRadius() { return powerRadius(); },
       get flameSparks() { return flameSparks; },
       locallyClear, topPixel, materialAt, boneUnlocked, detachIslands,
+      get maxFallingChunkPixels() { return MAX_FALLING_CHUNK_PIXELS; },
       get camera() { return cam; }
     };
   }
