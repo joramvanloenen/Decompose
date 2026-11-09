@@ -16,8 +16,8 @@
   const layers = [], charges = new Map(), particles = [], debris = [], dust = [], flameSparks = [];
   const MAX_FLAME_SPARKS = 520;
   const MAX_SUCTION_PARTICLES = 1500;
-  const MAX_FALLING_CHUNK_PIXELS = 112;
-  const MAX_FALLING_CHUNK_SPAN = 32;
+  const MAX_FALLING_CHUNK_PIXELS = 48;
+  const MAX_FALLING_CHUNK_SPAN = 14;
   const MAX_DEBRIS_CHUNKS = 200;
   const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
   let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W), groundY = -1;
@@ -435,6 +435,7 @@
     d.pixels[cell * 4 + 3] = 0;
     d.remaining = d.active.length;
     d.dirty = true;
+    d.flashDirty = true;
     d.profileDirty = true;
     return true;
   }
@@ -464,26 +465,43 @@
     }
   }
 
-  // A short violet FLASH on detachment and impact, never a permanent tint.
-  // Restore the pixel RGB from the exact source art after the glow fades.
+  // Keep ALL physical pixels in their source RGBA colors, permanently.
+  // Purple is a separate, time-limited visual overlay, never a mutation of
+  // the destructible layer or fragment pixel data.
   function tintDebris(d, dt) {
     d.tintClock += dt;
-    const detachFlash = Math.max(0, 1 - d.fallAge / 390) * .82;
+    const detachFlash = Math.max(0, 1 - d.fallAge / 300) * .78;
     const impactFlash = d.impactAt < 0 ? 0 :
-      Math.max(0, 1 - (d.fallAge - d.impactAt) / 250) * .62;
-    const target = Math.max(detachFlash, impactFlash);
-    if (Math.abs(target - d.tint) < .025 && !(target === 0 && d.tint > 0)) return;
-    if (d.tintClock < 33 && target > .02) return;
-    d.tintClock = 0;
-    d.tint = target;
-    for (const cell of d.active) {
-      const i = cell * 4, m = target;
-      const r = d.originalPixels[i], green = d.originalPixels[i + 1], blue = d.originalPixels[i + 2];
-      d.pixels[i] = Math.round(r * (1 - m) + 185 * m);
-      d.pixels[i + 1] = Math.round(green * (1 - m) + 57 * m);
-      d.pixels[i + 2] = Math.round(blue * (1 - m) + 246 * m);
+      Math.max(0, 1 - (d.fallAge - d.impactAt) / 220) * .50;
+    d.tint = Math.max(detachFlash, impactFlash);
+  }
+
+  // Cache a violet sprite matching only the CURRENT opaque debris pixels.
+  // The source sprite itself is always the exact original artwork.
+  function drawDebrisGlow(d, x, y) {
+    if (d.tint <= .006) return;
+    if (!d.glowSurface) {
+      d.glowSurface = createCanvas(d.w, d.h);
+      d.glowContext = d.glowSurface.getContext('2d');
+      d.flashDirty = true;
     }
-    d.dirty = true;
+    if (d.flashDirty) {
+      const glow = d.glowContext.createImageData(d.w, d.h);
+      for (let i = 0; i < d.pixels.length; i += 4) {
+        const alpha = d.pixels[i + 3];
+        if (alpha <= 24) continue;
+        glow.data[i] = 202;
+        glow.data[i + 1] = 66;
+        glow.data[i + 2] = 246;
+        glow.data[i + 3] = alpha;
+      }
+      d.glowContext.putImageData(glow, 0, 0);
+      d.flashDirty = false;
+    }
+    g.save();
+    g.globalAlpha = d.tint;
+    g.drawImage(d.glowSurface, x, y);
+    g.restore();
   }
 
   function refreshProfile(d) {
@@ -802,7 +820,9 @@
     }
     for (const d of debris) {
       if (d.x - cam > VW || d.x + d.w < cam) continue;
-      g.drawImage(d.surface, Math.round(d.x - cam), Math.round(d.y));
+      const dx = Math.round(d.x - cam), dy = Math.round(d.y);
+      g.drawImage(d.surface, dx, dy);
+      drawDebrisGlow(d, dx, dy);
     }
     for (const p of charges.values()) {
       const at = chargePosition(p), x = Math.round(at.x - cam);
