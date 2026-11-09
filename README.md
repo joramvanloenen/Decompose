@@ -4,7 +4,7 @@
 
 **[▶ Play Decompose](https://joramvanloenen.github.io/Decompose/)**
 
-Hold and drag to remove individual pixels from a corpse. The **44–51-pixel pulsating magical field** reaches much farther from the hand, and the brighter purple siphon pulls pixels through curling, noise-turbulent flame trails. Pixels glow **bright purple** while attached, then fly into the hand as deep-purple fragments.
+Hold and drag to remove individual pixels from a corpse. An **invisible 150-pixel absorption range** lets you harvest from far away without circles or range indicators around the hand, and the brighter purple siphon pulls pixels through curling, noise-turbulent flame trails. Pixels glow **bright purple** while attached, then fly into the hand as deep-purple fragments.
 
 ## Physical, locally gated layers
 
@@ -19,7 +19,7 @@ Hold and drag to remove individual pixels from a corpse. The **44–51-pixel pul
 
 ## Controls
 
-- **Mouse / touch:** hold and move to activate the extraction field; remain close to a pixel until it releases.
+- **Mouse / touch:** hold and move to siphon pixels from a distance (up to 150 sprite pixels away).
 - **LEFT / RIGHT:** pan across the body; keyboard arrows work too.
 - **?** instructions.
 - **RECONSTITUTE:** reset the body, fragments, counts, and magical energy.
