@@ -28,6 +28,7 @@
   let hold = false, hover = false, pan = 0, energy = 0, harvest = 0, taint = 0;
   let nowTime = 0, previous = performance.now(), connectivityClock = 0, needConnectivity = new Set();
   let loaded = false;
+  const airflow = new AirflowField(W, H, 8);
 
   function load(url) {
     return new Promise((resolve, reject) => {
@@ -210,6 +211,7 @@
       l.dirty = false;
     }
     particles.length = 0; flameSparks.length = 0; debris.length = 0; charges.clear();
+    airflow.clear();
     needConnectivity.clear(); connectivityClock = 0;
     energy = harvest = taint = 0; cam = wantCam = 0;
     updateHud();
@@ -246,6 +248,7 @@
       ashDuration: ash ? 850 + Math.random() * 900 : 0,
       k, sourceN, poisoned
     });
+    airflow.puff(x, y, evaporating ? .38 : .18);
     if (!ash && Math.random() < (evaporating ? .95 : .72)) spawnFlameSpark(x, y, poisoned);
   }
 
@@ -726,17 +729,15 @@
         particles.splice(i, 1);
         continue;
       }
-      // Free pixels continue in slow turbulence when not pressing, or
-      // outside the field. Ash keeps its weightless rising phase.
+      // Shared vector-field fluid motion. Nearby fragments feel the same eddies.
       const floatingAsh = p.ash && p.age < p.ashDuration;
+      const wind = airflow.sample(p.x, p.y);
       if (!channeling || floatingAsh) {
-        const wind = ashTurbulence(p.x, p.y, nowTime, p.seed);
-        const drag = Math.pow(floatingAsh ? .91 : .85, step);
-        const gust = floatingAsh ? .075 : .03;
-        p.vx = p.vx * drag + (wind.x * gust +
-          Math.sin(p.age * .007 + p.seed) * (floatingAsh ? .018 : .008)) * step;
-        p.vy = p.vy * drag + ((floatingAsh ? -.046 : -.012) +
-          wind.y * (floatingAsh ? .025 : .013)) * step;
+        const drag = Math.pow(floatingAsh ? .90 : .86, step);
+        const coupling = floatingAsh ? .25 : .16;
+        p.vx = p.vx * drag + wind.x * coupling * step;
+        p.vy = p.vy * drag + (wind.y * coupling -
+          (floatingAsh ? .06 : .009)) * step;
         const speed = Math.hypot(p.vx, p.vy);
         const maxSpeed = floatingAsh ? 1.25 : 3.4;
         if (speed > maxSpeed) { p.vx *= maxSpeed / speed; p.vy *= maxSpeed / speed; }
@@ -757,8 +758,8 @@
       const pull = .25 + .72 * (1 - Math.exp(-p.age / 210)) + 12 / (distance + 24) + .45 * surge;
       const curl = p.swirl * (.19 + .16 * Math.sin(p.age * .017 + p.seed)) +
         .19 * Math.sin(p.age * .034 + p.seed * 2);
-      const turbulence = turbulentFlow(p.x, p.y, nowTime);
-      const chaos = p.ash ? .25 : p.evaporating ? .34 : .14;
+      const turbulence = wind;
+      const chaos = p.ash ? .31 : p.evaporating ? .29 : .24;
       const lift = (p.evaporating ? -.46 : -.3) * Math.max(0, 1 - (p.ash ? Math.max(0, p.age - p.ashDuration) : p.age) / 420);
       const flicker = Math.sin(p.age * .043 + p.seed);
       const drag = Math.pow(.87, step);
@@ -787,10 +788,12 @@
       const distance = Math.hypot(dx, dy);
       if (s.age >= s.life || (hold && distance < 3)) { flameSparks.splice(i, 1); continue; }
       const attracting = hold && distance <= powerRadius() && distance > .001;
-      const drag = Math.pow(.93, step);
+      const drag = Math.pow(.92, step);
+      const wind = airflow.sample(s.x, s.y);
       s.vx = s.vx * drag + ((attracting ? dx / distance * .07 : 0) +
-        Math.sin(s.age * .03 + s.seed) * .1) * step;
-      s.vy = s.vy * drag + ((attracting ? dy / distance * .07 : 0) - .06) * step;
+        wind.x * .18) * step;
+      s.vy = s.vy * drag + ((attracting ? dy / distance * .07 : 0) +
+        wind.y * .18 - .035) * step;
       s.x += s.vx * step; s.y += s.vy * step;
     }
   }
@@ -925,6 +928,7 @@
       l.dirty = false;
     }
     moveDebris(dt);
+    airflow.step(dt, nowTime, hold, hand.x + cam, hand.y, powerRadius(), powerPulse());
     moveParticles(dt);
     moveFlameSparks(dt);
     updateHud();
@@ -946,6 +950,7 @@
       get ground() { return ground; }, get groundY() { return groundY; }, get particles() { return particles; },
       get powerRadius() { return powerRadius(); },
       get flameSparks() { return flameSparks; },
+      get airflow() { return {sample: (x,y) => airflow.sample(x,y),width:airflow.width,height:airflow.height}; },
       locallyClear, topPixel, materialAt, boneUnlocked, detachIslands,
       get maxFallingChunkPixels() { return MAX_FALLING_CHUNK_PIXELS; },
       get camera() { return cam; }
