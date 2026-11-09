@@ -16,6 +16,9 @@
   const layers = [], charges = new Map(), particles = [], debris = [], dust = [], flameSparks = [];
   const MAX_FLAME_SPARKS = 520;
   const MAX_SUCTION_PARTICLES = 1500;
+  // A fraction of real extracted pixels travel like weightless ash first.
+  const ASH_FROM_EXTRACTION = .24;
+  const ASH_FROM_CRUMBLE = .57;
   const MAX_FALLING_CHUNK_PIXELS = 48;
   const MAX_FALLING_CHUNK_SPAN = 14;
   const MAX_DEBRIS_CHUNKS = 200;
@@ -233,14 +236,17 @@
   // shed by gravity use this same path, so they still count only on absorption.
   function spawnSuctionParticle(x, y, k, sourceN, poisoned, evaporating = false) {
     const angle = Math.random() * Math.PI * 2;
+    const ash = Math.random() < (evaporating ? ASH_FROM_CRUMBLE : ASH_FROM_EXTRACTION);
     particles.push({
-      x, y, vx: Math.cos(angle) * (.3 + Math.random() * 1.1),
-      vy: (evaporating ? -1.7 : -.6) - Math.random() * 1.25,
+      x, y, vx: ash ? (Math.random() - .5) * .42 : Math.cos(angle) * (.3 + Math.random() * 1.1),
+      vy: ash ? -.18 - Math.random() * .45 : (evaporating ? -1.7 : -.6) - Math.random() * 1.25,
       age: 0, seed: Math.random() * Math.PI * 2,
       swirl: Math.random() < .5 ? -1 : 1, sparkClock: 0,
-      trail: [{ x, y }], evaporating, k, sourceN, poisoned
+      trail: [{ x, y }], evaporating, ash,
+      ashDuration: ash ? 850 + Math.random() * 900 : 0,
+      k, sourceN, poisoned
     });
-    if (Math.random() < (evaporating ? .95 : .72)) spawnFlameSpark(x, y, poisoned);
+    if (!ash && Math.random() < (evaporating ? .95 : .72)) spawnFlameSpark(x, y, poisoned);
   }
 
   // Continuous, spatially-coherent turbulence; no independent random jumps.
@@ -251,6 +257,31 @@
     return {
       x: Math.cos(b + a) * .65 + Math.sin(c) * .35,
       y: Math.sin(a - b) * .54 + Math.cos(c * 1.3) * .46
+    };
+  }
+
+  // Smooth 2D value-noise field, advected through time. Unlike random velocity
+  // kicks it produces coherent gusts: nearby ash drifts together in eddies.
+  function noise2(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    const fx = x - ix, fy = y - iy;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const hash = (a, b) => {
+      const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+      return (v - Math.floor(v)) * 2 - 1;
+    };
+    const top = hash(ix, iy) * (1 - sx) + hash(ix + 1, iy) * sx;
+    const bottom = hash(ix, iy + 1) * (1 - sx) + hash(ix + 1, iy + 1) * sx;
+    return top * (1 - sy) + bottom * sy;
+  }
+
+  function ashTurbulence(x, y, time, seed) {
+    const t = time * .00023;
+    return {
+      x: noise2(x * .028 + t * 2 + seed, y * .028 - t) * .8 +
+         noise2(x * .087 - t * 3, y * .087 + t * 1.5 + seed) * .4,
+      y: noise2(y * .037 + t * 1.7 + seed, x * .037 - t * 2) * .65 +
+         noise2(y * .093 - t, x * .093 + t * 2) * .35
     };
   }
 
@@ -693,17 +724,33 @@
         particles.splice(i, 1);
         continue;
       }
-      // A released pixel first rises and dances like a flame, then the
-      // magnetic pull wins. Curl is perpendicular to the hand direction,
-      // creating twisting violet ribbons rather than straight projectiles.
+      // Some real pixels become almost weightless ash. They rise against
+      // gravity, coherently wander through a slowly changing noise field,
+      // then yield to the magical attraction. They are never thrown away:
+      // only arrival at the hand counts as absorbed.
+      if (p.ash && p.age < p.ashDuration) {
+        const wind = ashTurbulence(p.x, p.y, nowTime, p.seed);
+        const drag = Math.pow(.91, step);
+        p.vx = p.vx * drag + (wind.x * .07 + Math.sin(p.age * .007 + p.seed) * .018) * step;
+        p.vy = p.vy * drag + (-.046 + wind.y * .025) * step;
+        const speed = Math.hypot(p.vx, p.vy);
+        if (speed > 1.25) { p.vx *= 1.25 / speed; p.vy *= 1.25 / speed; }
+        p.x += p.vx * step;
+        p.y += p.vy * step;
+        p.trail.unshift({ x: p.x, y: p.y });
+        if (p.trail.length > 3) p.trail.pop();
+        continue;
+      }
+      // When the ash phase ends, the particle becomes part of the purple
+      // siphon. Normal released pixels use the familiar swirling flame pull.
       const nx = dx / distance, ny = dy / distance;
       const surge = powerPulse();
       const pull = .25 + .72 * (1 - Math.exp(-p.age / 210)) + 12 / (distance + 24) + .45 * surge;
       const curl = p.swirl * (.19 + .16 * Math.sin(p.age * .017 + p.seed)) +
         .19 * Math.sin(p.age * .034 + p.seed * 2);
       const turbulence = turbulentFlow(p.x, p.y, nowTime);
-      const chaos = p.evaporating ? .34 : .14;
-      const lift = (p.evaporating ? -.46 : -.3) * Math.max(0, 1 - p.age / 420);
+      const chaos = p.ash ? .25 : p.evaporating ? .34 : .14;
+      const lift = (p.evaporating ? -.46 : -.3) * Math.max(0, 1 - (p.ash ? Math.max(0, p.age - p.ashDuration) : p.age) / 420);
       const flicker = Math.sin(p.age * .043 + p.seed);
       const drag = Math.pow(.87, step);
       p.vx = p.vx * drag + (nx * pull - ny * curl + flicker * .13 + turbulence.x * chaos) * step;
@@ -785,25 +832,31 @@
     for (const p of particles) {
       const x = Math.round(p.x - cam), y = Math.round(p.y);
       if (x < -8 || x > VW + 8 || y < -8 || y > H + 8) continue;
+      const floatingAsh = p.ash && p.age < p.ashDuration;
       for (let j = p.trail.length - 1; j >= 0; j--) {
         const point = p.trail[j];
-        g.globalAlpha = .12 + .45 * (p.trail.length - j) / p.trail.length;
-        g.fillStyle = p.poisoned ? '#e93588' : (j % 2 ? '#7c25d2' : '#a633f2');
+        g.globalAlpha = floatingAsh ? .07 + .11 * (p.trail.length - j) / p.trail.length
+          : .12 + .45 * (p.trail.length - j) / p.trail.length;
+        g.fillStyle = floatingAsh ? '#b0a5b3' : p.poisoned ? '#e93588' : (j % 2 ? '#7c25d2' : '#a633f2');
         g.fillRect(Math.round(point.x - cam), Math.round(point.y), 1, 1);
       }
-      const pulse = .5 + .5 * Math.sin(p.age * .046 + p.seed);
-      g.fillStyle = p.poisoned ? '#f8438b' : '#a739ff';
-      g.globalAlpha = .07 + pulse * .07;
-      g.fillRect(x - 2, y - 2, 5, 5);
-      g.globalAlpha = .18 + pulse * .15;
-      g.fillRect(x - 1, y - 1, 3, 3);
+      if (!floatingAsh) {
+        const pulse = .5 + .5 * Math.sin(p.age * .046 + p.seed);
+        g.fillStyle = p.poisoned ? '#f8438b' : '#a739ff';
+        g.globalAlpha = .07 + pulse * .07;
+        g.fillRect(x - 2, y - 2, 5, 5);
+        g.globalAlpha = .18 + pulse * .15;
+        g.fillRect(x - 1, y - 1, 3, 3);
+      }
     }
     g.restore();
     // Opaque cores deliberately stay deep purple even against bright BG.
     for (const p of particles) {
       const x = Math.round(p.x - cam), y = Math.round(p.y);
       if (x < 0 || x >= VW || y < 0 || y >= H) continue;
-      g.fillStyle = p.poisoned ? '#aa1c70' : '#6820ad';
+      const floatingAsh = p.ash && p.age < p.ashDuration;
+      g.fillStyle = floatingAsh ? (p.poisoned ? '#b588a4' : '#b5aeb5')
+        : p.poisoned ? '#aa1c70' : '#6820ad';
       g.fillRect(x, y, 1, 1);
     }
   }
