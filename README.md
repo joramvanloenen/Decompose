@@ -4,7 +4,7 @@
 
 **[▶ Play Decompose](https://joramvanloenen.github.io/Decompose/)**
 
-Hold and drag to remove individual pixels from a corpse. Pixels glow **bright purple** while still attached, then detach and become **deep-purple** fragments that fly into the sorcerer's hand.
+Hold and drag to remove individual pixels from a corpse. The **44–51-pixel pulsating magical field** reaches much farther from the hand, and the brighter purple siphon pulls pixels through curling, noise-turbulent flame trails. Pixels glow **bright purple** while attached, then fly into the hand as deep-purple fragments.
 
 ## Physical, locally gated layers
 
@@ -12,8 +12,9 @@ Hold and drag to remove individual pixels from a corpse. Pixels glow **bright pu
 - **Deeper layers remain sealed** until at least 84% of the overlying material in a small neighborhood (6–8 sprite pixels around the point) has been absorbed. This is **local**, not a whole-body threshold; harvesting an arm doesn't expose an untouched chest.
 - Cloth only needs to be removed **where it actually covers** dried remains.
 - The **skeleton cannot be harvested at all** until **every flesh, cloth, and dried-remains pixel has actually been absorbed**, including detached chunks and free-floating suction particles.
-- After extraction, the remaining layer is checked for **8-neighbor pixel connectivity**. Islands separated from its largest attached component become **rigid falling pixel clusters**, keeping their internal pattern intact. These chunks can be harvested after landing.
-- Falling pieces collide with a **height field derived from the original bottommost skeleton pixel at each X coordinate**. Gaps use the nearest defined height. The collider remains in place even during the final skeleton harvest.
+- After extraction, **8-neighbor connectivity** determines which sections fall. Detached sections fall under gravity, progressively turn violet, shed individual pixels into turbulent purple flame, and chip apart further when they strike the ground. The surviving connected piece can still be harvested after landing.
+- Falling pieces collide with a **height field derived from the original bottommost skeleton pixel at each X coordinate**. Gaps use the nearest defined height. If a piece starts inside the height field, it uses the bottom of the scene as a safe fallback instead of teleporting upward. Collision never pushes a piece upward. The collider remains in place during the final harvest.
+- All shattered/evaporated pixels remain individually accounted for and count as harvested **only after reaching the hand**; breaking pieces cannot unlock deeper tissue for free.
 - The background never changes.
 
 ## Controls
