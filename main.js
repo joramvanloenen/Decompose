@@ -452,8 +452,10 @@
 
   function tintDebris(d, dt) {
     d.tintClock += dt;
-    const target = Math.min(.88, d.fallAge / 600 * .88);
-    if (d.tintClock < 52 || target - d.tint < .045) return;
+    const target = d.settled ? .9 : Math.min(.88, d.fallAge / 600 * .88);
+    // Even a tiny piece that drops only a few pixels flashes violet on impact.
+    if ((d.tintClock < 52 && !(d.settled && d.tint < .85)) ||
+        target - d.tint < .045) return;
     d.tintClock = 0;
     d.tint = target;
     for (const cell of d.active) {
