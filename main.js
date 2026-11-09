@@ -9,7 +9,8 @@
   const canvas = $('game'), g = canvas.getContext('2d', { alpha: false });
   g.imageSmoothingEnabled = false;
   const clamp = (v, low, high) => Math.max(low, Math.min(high, v));
-  const layers = [], charges = new Map(), particles = [], debris = [], dust = [];
+  const layers = [], charges = new Map(), particles = [], debris = [], dust = [], flameSparks = [];
+  const MAX_FLAME_SPARKS = 360;
     const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
   let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W);
   let background, cam = 0, wantCam = 0, hand = { x: VW / 2, y: 120 };
@@ -198,7 +199,7 @@
       l.absorbed.fill(0);
       l.dirty = false;
     }
-    particles.length = 0; debris.length = 0; charges.clear();
+    particles.length = 0; flameSparks.length = 0; debris.length = 0; charges.clear();
     needConnectivity.clear(); connectivityClock = 0;
     energy = harvest = taint = 0; cam = wantCam = 0;
     updateHud();
@@ -207,6 +208,17 @@
 
   function tainted(x, y, k) {
     return k === 2 && ((x - 188) / 17) ** 2 + ((y - 128) / 8) ** 2 < 1;
+  }
+
+  // Visual embers never affect harvesting counts. Cap them for slower phones.
+  function spawnFlameSpark(x, y, poisoned, vx = 0, vy = 0) {
+    if (flameSparks.length >= MAX_FLAME_SPARKS) flameSparks.shift();
+    flameSparks.push({
+      x, y, vx: vx * .3 + (Math.random() - .5) * .65,
+      vy: vy * .3 - .24 - Math.random() * .5,
+      age: 0, life: 220 + Math.random() * 320,
+      seed: Math.random() * Math.PI * 2, poisoned
+    });
   }
 
   function chargeKey(m) {
@@ -258,11 +270,22 @@
         layer.dirty = true;
         needConnectivity.add(p.k);
       }
-      particles.push({ x: world.x, y: world.y, vx: (Math.random() - .5) * 1.2,
-        vy: -1 - Math.random(), k: p.k, sourceN: p.chunk
+      const poisoned = tainted(world.x, world.y, p.k);
+      const angle = Math.random() * Math.PI * 2;
+      particles.push({
+        x: world.x, y: world.y,
+        vx: Math.cos(angle) * (.25 + Math.random() * .9),
+        vy: -.55 - Math.random() * 1.25,
+        age: 0, seed: Math.random() * Math.PI * 2,
+        swirl: Math.random() < .5 ? -1 : 1, sparkClock: 0,
+        trail: [{ x: world.x, y: world.y }],
+        k: p.k, sourceN: p.chunk
           ? (p.chunk.sourceY + p.y) * W + (p.chunk.sourceX + p.x)
-          : p.y * W + p.x, poisoned: tainted(world.x, world.y, p.k) });
-      if (tainted(world.x, world.y, p.k)) taint = clamp(taint + 1.2, 0, 100);
+          : p.y * W + p.x, poisoned
+      });
+      // First violet sparks peel off as the pixel is pulled free.
+      if (Math.random() < .65) spawnFlameSpark(world.x, world.y, poisoned);
+      if (poisoned) taint = clamp(taint + 1.2, 0, 100);
       charges.delete(key);
     }
   }
@@ -398,20 +421,59 @@
   function moveParticles(dt) {
     const step = clamp(dt / 16.667, 0, 2.5), tx = hand.x + cam, ty = hand.y;
     for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i], dx = tx - p.x, dy = ty - p.y;
+      const p = particles[i];
+      p.age += dt;
+      const dx = tx - p.x, dy = ty - p.y;
       const distance = Math.hypot(dx, dy);
       if (distance < 4) {
+        // Only actual arrival at the hand counts toward local unlocking.
         layers[p.k].unabsorbed--;
         layers[p.k].absorbed[p.sourceN] = 1;
         harvest++;
         if (!p.poisoned) energy++;
+        if (Math.random() < .4) spawnFlameSpark(tx, ty, p.poisoned);
         particles.splice(i, 1);
         continue;
       }
-      const accel = .19 + Math.min(1.4, 15 / (distance + 5));
-      p.vx = p.vx * Math.pow(.90, step) + dx / distance * accel * step;
-      p.vy = p.vy * Math.pow(.90, step) + dy / distance * accel * step;
+      // A released pixel first rises and dances like a flame, then the
+      // magnetic pull wins. Curl is perpendicular to the hand direction,
+      // creating twisting violet ribbons rather than straight projectiles.
+      const nx = dx / distance, ny = dy / distance;
+      const pull = .15 + .46 * (1 - Math.exp(-p.age / 240)) + 8 / (distance + 24);
+      const curl = p.swirl * (.14 + .13 * Math.sin(p.age * .017 + p.seed)) +
+        .16 * Math.sin(p.age * .034 + p.seed * 2);
+      const lift = -.25 * Math.max(0, 1 - p.age / 360);
+      const flicker = Math.sin(p.age * .043 + p.seed);
+      const drag = Math.pow(.88, step);
+      p.vx = p.vx * drag + (nx * pull - ny * curl + flicker * .13) * step;
+      p.vy = p.vy * drag + (ny * pull + nx * curl + lift +
+        Math.cos(p.age * .037 + p.seed) * .08) * step;
+      const speed = Math.hypot(p.vx, p.vy);
+      if (speed > 4.2) { p.vx *= 4.2 / speed; p.vy *= 4.2 / speed; }
       p.x += p.vx * step; p.y += p.vy * step;
+      p.trail.unshift({ x: p.x, y: p.y });
+      if (p.trail.length > 6) p.trail.pop();
+      p.sparkClock += dt;
+      if (p.sparkClock > 60 && Math.random() < .32) {
+        spawnFlameSpark(p.x, p.y, p.poisoned, p.vx, p.vy);
+        p.sparkClock = 0;
+      }
+    }
+  }
+
+  function moveFlameSparks(dt) {
+    const step = clamp(dt / 16.667, 0, 2.5), tx = hand.x + cam, ty = hand.y;
+    for (let i = flameSparks.length - 1; i >= 0; i--) {
+      const s = flameSparks[i];
+      s.age += dt;
+      const dx = tx - s.x, dy = ty - s.y;
+      const distance = Math.hypot(dx, dy);
+      if (s.age >= s.life || distance < 3) { flameSparks.splice(i, 1); continue; }
+      const drag = Math.pow(.93, step);
+      s.vx = s.vx * drag + (dx / distance * .07 +
+        Math.sin(s.age * .03 + s.seed) * .1) * step;
+      s.vy = s.vy * drag + (dy / distance * .07 - .06) * step;
+      s.x += s.vx * step; s.y += s.vy * step;
     }
   }
 
@@ -451,6 +513,49 @@
     g.restore();
   }
 
+  // Three passes: faint additive fire wisps, short glowing trails, then
+  // an opaque DEEP-purple source pixel. Source sprites stay perfectly sharp.
+  function renderFlames() {
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    for (const s of flameSparks) {
+      const x = Math.round(s.x - cam), y = Math.round(s.y);
+      if (x < -5 || x > VW + 5 || y < -5 || y > H + 5) continue;
+      const fade = Math.max(0, 1 - s.age / s.life);
+      g.globalAlpha = fade * (.25 + .2 * Math.sin(s.age * .037 + s.seed) ** 2);
+      g.fillStyle = s.poisoned ? '#ff4b93' : '#ac37ef';
+      g.fillRect(x, y, 1, 1);
+      if (fade > .7) {
+        g.globalAlpha = fade * .08;
+        g.fillRect(x - 1, y - 1, 3, 3);
+      }
+    }
+    for (const p of particles) {
+      const x = Math.round(p.x - cam), y = Math.round(p.y);
+      if (x < -8 || x > VW + 8 || y < -8 || y > H + 8) continue;
+      for (let j = p.trail.length - 1; j >= 0; j--) {
+        const point = p.trail[j];
+        g.globalAlpha = .12 + .45 * (p.trail.length - j) / p.trail.length;
+        g.fillStyle = p.poisoned ? '#e93588' : (j % 2 ? '#7c25d2' : '#a633f2');
+        g.fillRect(Math.round(point.x - cam), Math.round(point.y), 1, 1);
+      }
+      const pulse = .5 + .5 * Math.sin(p.age * .046 + p.seed);
+      g.fillStyle = p.poisoned ? '#f8438b' : '#a739ff';
+      g.globalAlpha = .07 + pulse * .07;
+      g.fillRect(x - 2, y - 2, 5, 5);
+      g.globalAlpha = .18 + pulse * .15;
+      g.fillRect(x - 1, y - 1, 3, 3);
+    }
+    g.restore();
+    // Opaque cores deliberately stay deep purple even against bright BG.
+    for (const p of particles) {
+      const x = Math.round(p.x - cam), y = Math.round(p.y);
+      if (x < 0 || x >= VW || y < 0 || y >= H) continue;
+      g.fillStyle = p.poisoned ? '#aa1c70' : '#6820ad';
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+
   function render() {
     g.clearRect(0, 0, VW, H);
     g.drawImage(background, -Math.round(cam), 0);
@@ -474,12 +579,7 @@
         g.fillStyle = '#cd36ff44'; g.fillRect(x - 1, at.y - 1, 3, 3);
       }
     }
-    for (const p of particles) {
-      const x = p.x - cam;
-      if (x < -5 || x > VW + 5) continue;
-      g.fillStyle = p.poisoned ? '#f4378d' : '#6821a6';
-      g.fillRect(Math.round(x), Math.round(p.y), 1, 1);
-    }
+    renderFlames();
     for (const m of dust) {
       g.fillStyle = '#80df7c'; g.globalAlpha = .1 + .12 * Math.sin(nowTime * .001 + m.p);
       g.fillRect(Math.round(m.x - cam * .25), Math.round(m.y), 1, 1);
@@ -507,6 +607,7 @@
     }
     moveDebris(dt);
     moveParticles(dt);
+    moveFlameSparks(dt);
     updateHud();
     $('position').style.left = ((cam / (W - VW)) * 92) + '%';
     if (hold) {
@@ -524,6 +625,7 @@
     window.__DECOMPOSE_DEBUG__ = {
       get ready() { return loaded; }, get layers() { return layers; }, get debris() { return debris; },
       get ground() { return ground; }, get particles() { return particles; },
+      get flameSparks() { return flameSparks; },
       locallyClear, topPixel, materialAt, boneUnlocked, detachIslands,
       get camera() { return cam; }
     };
