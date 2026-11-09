@@ -3,8 +3,10 @@
 
   // All original PNGs share one pixel grid. The camera moves; the images never do.
   const W = 364, H = 204, VW = 236, PIXELS = W * H;
-  // One radius drives detection, charged-pixel range and the visible magic field.
-  const EXTRACTION_RADIUS = 25;
+  // A breathing extraction field, approximately 44–51 source pixels in radius.
+  const EXTRACTION_RADIUS = 46;
+  function powerPulse() { return .5 + .5 * Math.sin(nowTime * .010); }
+  function powerRadius() { return EXTRACTION_RADIUS * (.95 + .16 * powerPulse()); }
   const NAMES = ['OUTER FLESH', 'FUNERAL CLOTH', 'DRIED REMAINS', 'ANCIENT BONES'];
   const FILES = ['Coprse01_alive.png', 'Coprse02_Cloth.png', 'Coprse03_Dried.png', 'Coprse04_Skeleton.png'];
   const $ = id => document.getElementById(id);
@@ -12,8 +14,9 @@
   g.imageSmoothingEnabled = false;
   const clamp = (v, low, high) => Math.max(low, Math.min(high, v));
   const layers = [], charges = new Map(), particles = [], debris = [], dust = [], flameSparks = [];
-  const MAX_FLAME_SPARKS = 360;
-    const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
+  const MAX_FLAME_SPARKS = 520;
+  const MAX_SUCTION_PARTICLES = 1500;
+  const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
   let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W);
   let background, cam = 0, wantCam = 0, hand = { x: VW / 2, y: 120 };
   let hold = false, hover = false, pan = 0, energy = 0, harvest = 0, taint = 0;
@@ -223,6 +226,32 @@
     });
   }
 
+
+  // Every extracted pixel has exactly one original source location. Fragments
+  // shed by gravity use this same path, so they still count only on absorption.
+  function spawnSuctionParticle(x, y, k, sourceN, poisoned, evaporating = false) {
+    const angle = Math.random() * Math.PI * 2;
+    particles.push({
+      x, y, vx: Math.cos(angle) * (.3 + Math.random() * 1.1),
+      vy: (evaporating ? -1.7 : -.6) - Math.random() * 1.25,
+      age: 0, seed: Math.random() * Math.PI * 2,
+      swirl: Math.random() < .5 ? -1 : 1, sparkClock: 0,
+      trail: [{ x, y }], evaporating, k, sourceN, poisoned
+    });
+    if (Math.random() < (evaporating ? .95 : .72)) spawnFlameSpark(x, y, poisoned);
+  }
+
+  // Continuous, spatially-coherent turbulence; no independent random jumps.
+  function turbulentFlow(x, y, time) {
+    const a = x * .106 + time * .0018;
+    const b = y * .083 - time * .0024;
+    const c = x * .063 - y * .117 + time * .0031;
+    return {
+      x: Math.cos(b + a) * .65 + Math.sin(c) * .35,
+      y: Math.sin(a - b) * .54 + Math.cos(c * 1.3) * .46
+    };
+  }
+
   function chargeKey(m) {
     return m.chunk ? `d${m.chunk.id}:${m.y * m.chunk.w + m.x}` : `l${m.k}:${m.y * W + m.x}`;
   }
@@ -230,9 +259,10 @@
   function gather(dt) {
     if (!hold || !loaded) return;
     const cx = hand.x + cam, cy = hand.y;
-    const count = Math.max(20, Math.round(dt * 3.2));
+    const count = Math.max(34, Math.round(dt * 4.8));
+    const radius = powerRadius();
     for (let n = 0; n < count; n++) {
-      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * EXTRACTION_RADIUS;
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * radius;
       const m = materialAt(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
       if (!m) continue;
       const key = chargeKey(m);
@@ -255,38 +285,29 @@
         charges.delete(key); continue;
       }
       const distance = Math.hypot(world.x - hand.x - cam, world.y - hand.y);
-      if (!hold || distance > EXTRACTION_RADIUS + 1.5) {
+      if (!hold || distance > powerRadius() + 3) {
         p.phase -= dt * .008;
         if (p.phase <= 0) charges.delete(key);
         continue;
       }
-      p.phase += dt * (.005 + .001 * Math.random());
+      p.phase += dt * (.007 + .004 * powerPulse() + .0015 * Math.random());
       if (p.phase < 1) continue;
-      pixels[index + 3] = 0;
       if (p.chunk) {
-        p.chunk.remaining--;
-        p.chunk.dirty = true;
-        p.chunk.profileDirty = true;
+        if (!clearDebrisCell(p.chunk, p.y * p.chunk.w + p.x)) {
+          charges.delete(key); continue;
+        }
       } else {
+        pixels[index + 3] = 0;
         layer.remaining--;
         layer.dirty = true;
         needConnectivity.add(p.k);
       }
-      const poisoned = tainted(world.x, world.y, p.k);
-      const angle = Math.random() * Math.PI * 2;
-      particles.push({
-        x: world.x, y: world.y,
-        vx: Math.cos(angle) * (.25 + Math.random() * .9),
-        vy: -.55 - Math.random() * 1.25,
-        age: 0, seed: Math.random() * Math.PI * 2,
-        swirl: Math.random() < .5 ? -1 : 1, sparkClock: 0,
-        trail: [{ x: world.x, y: world.y }],
-        k: p.k, sourceN: p.chunk
-          ? (p.chunk.sourceY + p.y) * W + (p.chunk.sourceX + p.x)
-          : p.y * W + p.x, poisoned
-      });
-      // First violet sparks peel off as the pixel is pulled free.
-      if (Math.random() < .65) spawnFlameSpark(world.x, world.y, poisoned);
+      const sourceN = p.chunk
+        ? (p.chunk.sourceY + p.y) * W + (p.chunk.sourceX + p.x)
+        : p.y * W + p.x;
+      const poisoned = tainted(p.chunk ? p.chunk.sourceX + p.x : p.x,
+        p.chunk ? p.chunk.sourceY + p.y : p.y, p.k);
+      spawnSuctionParticle(world.x, world.y, p.k, sourceN, poisoned);
       if (poisoned) taint = clamp(taint + 1.2, 0, 100);
       charges.delete(key);
     }
@@ -368,12 +389,81 @@
       for (let c = 0; c < 4; c++) data.data[to + c] = src[from + c];
       src[from + 3] = 0;
     }
-    const d = { id: ++chunkId, layer: k, x: minX, y: minY, sourceX: minX, sourceY: minY, w, h, surface, context,
-      pixels: data.data, remaining: cells.length, vx: (Math.random() - .5) * 4,
-      vy: 0, settled: false, dirty: true, profileDirty: true, profile: [] };
+    const active = [], slot = new Int32Array(w * h).fill(-1);
+    for (const n of cells) {
+      const local = (((n / W) | 0) - minY) * w + (n % W) - minX;
+      slot[local] = active.length;
+      active.push(local);
+    }
+    const d = { id: ++chunkId, layer: k, x: minX, y: minY,
+      sourceX: minX, sourceY: minY, spawnY: minY,
+      w, h, surface, context, pixels: data.data, originalPixels: new Uint8ClampedArray(data.data),
+      remaining: cells.length, active, slot, vx: (Math.random() - .5) * 3,
+      vy: 0, settled: false, dirty: true, profileDirty: true, profile: [],
+      fallAge: 0, aftershock: 0, shedAccumulator: 0, tint: 0, tintClock: 0 };
     debris.push(d);
     layers[k].remaining -= cells.length;
     layers[k].dirty = true;
+  }
+
+
+  // Dense occupancy array permits O(1) removal, even when only a few pixels
+  // remain after both player extraction and gravity fragmentation.
+  function clearDebrisCell(d, cell) {
+    const index = d.slot[cell];
+    if (index < 0) return false;
+    const last = d.active.pop();
+    if (index < d.active.length) {
+      d.active[index] = last;
+      d.slot[last] = index;
+    }
+    d.slot[cell] = -1;
+    d.pixels[cell * 4 + 3] = 0;
+    d.remaining = d.active.length;
+    d.dirty = true;
+    d.profileDirty = true;
+    return true;
+  }
+
+  function crumbleDebris(d, count) {
+    if (!d.remaining || particles.length >= MAX_SUCTION_PARTICLES) return;
+    const limit = Math.min(count, d.remaining, MAX_SUCTION_PARTICLES - particles.length);
+    for (let i = 0; i < limit; i++) {
+      // Prefer exposed edges; clustered releases resemble crumbling cloth
+      // and flesh rather than evenly distributed random holes.
+      let cell = d.active[(Math.random() * d.active.length) | 0];
+      for (let attempt = 0; attempt < 7; attempt++) {
+        const candidate = d.active[(Math.random() * d.active.length) | 0];
+        const x = candidate % d.w, y = (candidate / d.w) | 0;
+        if (x === 0 || y === 0 || x === d.w - 1 || y === d.h - 1 ||
+            d.slot[candidate - 1] < 0 || d.slot[candidate + 1] < 0 ||
+            d.slot[candidate - d.w] < 0 || d.slot[candidate + d.w] < 0) {
+          cell = candidate; break;
+        }
+      }
+      const x = cell % d.w, y = (cell / d.w) | 0;
+      const sourceX = d.sourceX + x, sourceY = d.sourceY + y;
+      if (!clearDebrisCell(d, cell)) continue;
+      const poisoned = tainted(sourceX, sourceY, d.layer);
+      spawnSuctionParticle(d.x + x, d.y + y, d.layer, sourceY * W + sourceX, poisoned, true);
+      if (poisoned) taint = clamp(taint + .55, 0, 100);
+    }
+  }
+
+  function tintDebris(d, dt) {
+    d.tintClock += dt;
+    const target = Math.min(.88, d.fallAge / 600 * .88);
+    if (d.tintClock < 52 || target - d.tint < .045) return;
+    d.tintClock = 0;
+    d.tint = target;
+    for (const cell of d.active) {
+      const i = cell * 4, m = target;
+      const r = d.originalPixels[i], gr = d.originalPixels[i + 1], b = d.originalPixels[i + 2];
+      d.pixels[i] = r * (1 - m) + 147 * m;
+      d.pixels[i + 1] = gr * (1 - m) + 32 * m;
+      d.pixels[i + 2] = b * (1 - m) + 206 * m;
+    }
+    d.dirty = true;
   }
 
   function refreshProfile(d) {
@@ -387,10 +477,8 @@
   }
 
   function floorLimit(d) {
-    let maxY = H - d.h;
-    // Each occupied column of a rigid piece must remain above the skeleton's
-    // height field. Prevents a long bone/cloth fragment from tunnelling in.
-    maxY = H;
+    // The skeleton's original lowest pixel in each column is the collider.
+    let maxY = H;
     for (let x = 0; x < d.w; x++) {
       if (d.profile[x] < 0) continue;
       const worldX = clamp(Math.round(d.x) + x, 0, W - 1);
@@ -404,18 +492,47 @@
     for (let i = debris.length - 1; i >= 0; i--) {
       const d = debris[i];
       if (!d.remaining) { debris.splice(i, 1); continue; }
+      d.fallAge += dt;
       if (d.profileDirty) refreshProfile(d);
+      if (!d.settled) {
+        d.vy = Math.min(d.vy + 275 * seconds, 160);
+        d.x = clamp(d.x + d.vx * seconds, 0, Math.max(0, W - d.w));
+        const previousY = d.y;
+        const nextY = previousY + d.vy * seconds;
+        const boneFloor = floorLimit(d);
+        // A piece may ALREADY overlap the height field where it detaches.
+        // Old code forced y=boneFloor and visibly launched pieces UPWARD.
+        // Use scene floor for such pieces and never permit negative motion.
+        const bottom = Math.max(...d.profile);
+        const sceneFloor = Math.max(d.spawnY + 2, H - 1 - bottom);
+        const contactY = boneFloor < d.spawnY + 1 ? sceneFloor : boneFloor;
+        if (nextY >= contactY) {
+          d.y = Math.max(previousY, contactY);
+          d.vy = d.vx = 0;
+          d.settled = true;
+          d.aftershock = 0;
+          crumbleDebris(d, Math.min(72, Math.ceil(d.remaining * (.12 + Math.random() * .07))));
+        } else {
+          d.y = nextY;
+          d.shedAccumulator += dt * Math.min(.055, Math.max(.008, d.remaining * .000017));
+          const shed = Math.min(9, Math.floor(d.shedAccumulator));
+          if (shed > 0) { crumbleDebris(d, shed); d.shedAccumulator -= shed; }
+        }
+      } else {
+        // A brief secondary crumble on impact. The rest stays on the ground
+        // and can still be harvested directly with the hand.
+        d.aftershock += dt;
+        if (d.aftershock < 650) {
+          d.shedAccumulator += dt * Math.min(.02, Math.max(.004, d.remaining * .000008));
+          const shed = Math.floor(d.shedAccumulator);
+          if (shed > 0) { crumbleDebris(d, shed); d.shedAccumulator -= shed; }
+        }
+      }
+      if (d.profileDirty) refreshProfile(d);
+      tintDebris(d, dt);
       if (d.dirty) {
         d.context.putImageData(new ImageData(new Uint8ClampedArray(d.pixels), d.w, d.h), 0, 0);
         d.dirty = false;
-      }
-      if (d.settled) continue;
-      d.vy = Math.min(d.vy + 240 * seconds, 155);
-      d.x = clamp(d.x + d.vx * seconds, 0, W - d.w);
-      d.y += d.vy * seconds;
-      const floor = floorLimit(d);
-      if (d.y >= floor) {
-        d.y = floor; d.vy = 0; d.vx = 0; d.settled = true;
       }
     }
   }
@@ -441,22 +558,25 @@
       // magnetic pull wins. Curl is perpendicular to the hand direction,
       // creating twisting violet ribbons rather than straight projectiles.
       const nx = dx / distance, ny = dy / distance;
-      const pull = .15 + .46 * (1 - Math.exp(-p.age / 240)) + 8 / (distance + 24);
-      const curl = p.swirl * (.14 + .13 * Math.sin(p.age * .017 + p.seed)) +
-        .16 * Math.sin(p.age * .034 + p.seed * 2);
-      const lift = -.25 * Math.max(0, 1 - p.age / 360);
+      const surge = powerPulse();
+      const pull = .25 + .72 * (1 - Math.exp(-p.age / 210)) + 12 / (distance + 24) + .45 * surge;
+      const curl = p.swirl * (.19 + .16 * Math.sin(p.age * .017 + p.seed)) +
+        .19 * Math.sin(p.age * .034 + p.seed * 2);
+      const turbulence = turbulentFlow(p.x, p.y, nowTime);
+      const chaos = p.evaporating ? .34 : .14;
+      const lift = (p.evaporating ? -.46 : -.3) * Math.max(0, 1 - p.age / 420);
       const flicker = Math.sin(p.age * .043 + p.seed);
-      const drag = Math.pow(.88, step);
-      p.vx = p.vx * drag + (nx * pull - ny * curl + flicker * .13) * step;
+      const drag = Math.pow(.87, step);
+      p.vx = p.vx * drag + (nx * pull - ny * curl + flicker * .13 + turbulence.x * chaos) * step;
       p.vy = p.vy * drag + (ny * pull + nx * curl + lift +
-        Math.cos(p.age * .037 + p.seed) * .08) * step;
+        Math.cos(p.age * .037 + p.seed) * .08 + turbulence.y * chaos) * step;
       const speed = Math.hypot(p.vx, p.vy);
-      if (speed > 4.2) { p.vx *= 4.2 / speed; p.vy *= 4.2 / speed; }
+      if (speed > 6.2) { p.vx *= 6.2 / speed; p.vy *= 6.2 / speed; }
       p.x += p.vx * step; p.y += p.vy * step;
       p.trail.unshift({ x: p.x, y: p.y });
       if (p.trail.length > 6) p.trail.pop();
       p.sparkClock += dt;
-      if (p.sparkClock > 60 && Math.random() < .32) {
+      if (p.sparkClock > (p.evaporating ? 25 : 46) && Math.random() < (p.evaporating ? .7 : .47)) {
         spawnFlameSpark(p.x, p.y, p.poisoned, p.vx, p.vy);
         p.sparkClock = 0;
       }
@@ -492,7 +612,7 @@
   function drawHand() {
     if (!hover && !hold) return;
     const x = Math.round(hand.x), y = Math.round(hand.y);
-    g.save(); g.translate(x, y); g.shadowBlur = hold ? 9 : 4; g.shadowColor = '#ab37ed';
+    g.save(); g.translate(x, y); g.shadowBlur = hold ? 19 : 4; g.shadowColor = '#c644ff';
     g.fillStyle = '#14221b'; g.fillRect(4, 12, 9, 12); g.fillRect(-7, 6, 15, 11);
     g.fillStyle = '#536c61'; g.fillRect(-7, 7, 14, 9); g.fillRect(-3, 1, 9, 12); g.fillRect(3, 13, 9, 10);
     g.fillStyle = '#acc1a8'; g.fillRect(-6, 4, 11, 4); g.fillRect(-4, 0, 8, 4);
@@ -504,13 +624,25 @@
     }
     g.fillStyle = '#8d45b6'; g.fillRect(-8, -2, 3, 5);
     if (hold) {
-      g.strokeStyle = '#c454ff'; g.lineWidth = 1; g.beginPath();
-      g.arc(0, -1, EXTRACTION_RADIUS + Math.sin(nowTime * .009) * 1.1, 0, Math.PI * 2); g.stroke();
-      for (let i = 0; i < 5; i++) {
-        const a = nowTime * .003 + i * 1.256;
-        g.fillStyle = i % 2 ? '#e3afff' : '#aa37ef';
-        g.fillRect(Math.cos(a) * (EXTRACTION_RADIUS + 3) | 0, Math.sin(a) * (EXTRACTION_RADIUS + 3) - 2 | 0, 2, 2);
+      const pulse = powerPulse(), radius = powerRadius();
+      g.strokeStyle = '#bb46ef'; g.lineWidth = 1;
+      g.globalAlpha = .3 + .35 * pulse;
+      g.beginPath(); g.arc(0, -1, radius, 0, Math.PI * 2); g.stroke();
+      g.globalAlpha = .28 + .28 * (1 - pulse);
+      g.beginPath(); g.arc(0, -1, radius * (.72 + .06 * pulse), 0, Math.PI * 2); g.stroke();
+      g.globalAlpha = .7;
+      g.beginPath();
+      g.arc(0, -1, radius + 3, nowTime * .003, nowTime * .003 + 1.2); g.stroke();
+      g.beginPath();
+      g.arc(0, -1, radius + 3, nowTime * -.002 + 2.3, nowTime * -.002 + 3.3); g.stroke();
+      for (let i = 0; i < 11; i++) {
+        const a = nowTime * (.0015 + i % 3 * .0007) + i * 2.4;
+        const r = radius * (.64 + .42 * (i % 4) / 3);
+        g.globalAlpha = .4 + .5 * pulse;
+        g.fillStyle = i % 3 ? '#a63cff' : '#f5b0ff';
+        g.fillRect(Math.round(Math.cos(a) * r), Math.round(Math.sin(a) * r) - 2, 2, 2);
       }
+      g.globalAlpha = 1;
     }
     g.restore();
   }
@@ -576,7 +708,9 @@
       const at = chargePosition(p), x = Math.round(at.x - cam);
       if (x < 0 || x >= VW) continue;
       g.fillStyle = p.phase > .6 ? '#f2b8ff' : p.phase > .22 ? '#d953ff' : '#a937ef';
+      g.globalAlpha = .7 + .3 * powerPulse();
       g.fillRect(x, at.y, 1, 1);
+      g.globalAlpha = 1;
       if (p.phase > .65) {
         g.fillStyle = '#cd36ff44'; g.fillRect(x - 1, at.y - 1, 3, 3);
       }
@@ -627,6 +761,7 @@
     window.__DECOMPOSE_DEBUG__ = {
       get ready() { return loaded; }, get layers() { return layers; }, get debris() { return debris; },
       get ground() { return ground; }, get particles() { return particles; },
+      get powerRadius() { return powerRadius(); },
       get flameSparks() { return flameSparks; },
       locallyClear, topPixel, materialAt, boneUnlocked, detachIslands,
       get camera() { return cam; }
