@@ -1,126 +1,532 @@
 (() => {
-'use strict';
-const W=364,H=204,VW=236, names=['OUTER FLESH','FUNERAL CLOTH','DRIED REMAINS','ANCIENT BONES'];
-const filenames=['Coprse01_alive.png','Coprse02_Cloth.png','Coprse03_Dried.png','Coprse04_Skeleton.png'];
-const $=id=>document.getElementById(id),canvas=$('game'),g=canvas.getContext('2d',{alpha:false});g.imageSmoothingEnabled=false;
-const layers=[], particles=[], charges=new Map(), dust=[];
-let background,cam=0,wantCam=0,hand={x:VW/2,y:120},hold=false,hover=false,pan=0,energy=0,harvest=0,taint=0,t=0,previous=performance.now();
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-function load(url){return new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=()=>reject(new Error(url));i.src=url})}
-async function init(){
- try{
- const imgs=await Promise.all(['assets/Coprse_BG.png',...filenames.map(n=>'assets/'+n)].map(load));
- background=imgs[0];
- for(let k=0;k<4;k++){
- const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(imgs[k+1],0,0);
- layers.push({canvas:c,context:x,pixels:x.getImageData(0,0,W,H).data,source:imgs[k+1],dirty:false});
- }
- for(let i=0;i<42;i++)dust.push({x:Math.random()*W,y:Math.random()*H,p:Math.random()*6});
- $('loading').style.opacity='0';setTimeout(()=>$('loading')?.remove(),600);
- requestAnimationFrame(frame);
- }catch(err){$('loading').textContent='ASSET ERROR: '+err.message;console.error(err)}
-}
-function topPixel(x,y){x=Math.round(x);y=Math.round(y);if(x<0||y<0||x>=W||y>=H)return -1;const off=(y*W+x)*4+3;for(let k=0;k<layers.length;k++)if(layers[k].pixels[off]>24)return k;return -1}
-function overTaint(x,y){return ((x-188)/17)**2+((y-128)/8)**2<1}
-function pointer(e){
- const r=canvas.getBoundingClientRect(),ar=VW/H,bar=r.width/r.height;let x,y;
- if(bar>ar){let w=r.height*ar;x=(e.clientX-r.left-(r.width-w)/2)/w*VW;y=(e.clientY-r.top)/r.height*H}
- else{let h=r.width/ar;x=(e.clientX-r.left)/r.width*VW;y=(e.clientY-r.top-(r.height-h)/2)/h*H}
- hand={x:clamp(x,0,VW),y:clamp(y,0,H)};hover=true;
-}
-canvas.addEventListener('pointerdown',e=>{e.preventDefault();canvas.setPointerCapture(e.pointerId);pointer(e);hold=true;$('hint').style.opacity=0});
-canvas.addEventListener('pointermove',pointer);
-canvas.addEventListener('pointerenter',()=>hover=true);
-canvas.addEventListener('pointerleave',()=>{if(!hold)hover=false});
-for(const n of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(n,()=>hold=false);
-for(const [id,dir] of [['panLeft',-1],['panRight',1]]){
- const b=$(id);b.addEventListener('pointerdown',e=>{e.preventDefault();b.setPointerCapture(e.pointerId);pan=dir});
- for(const ev of ['pointerup','pointercancel','lostpointercapture'])b.addEventListener(ev,()=>pan=0);
- b.addEventListener('click',()=>wantCam=clamp(wantCam+dir*40,0,W-VW));
-}
-addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){pan=e.key==='ArrowLeft'?-1:1;e.preventDefault()}});
-addEventListener('keyup',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight')pan=0});
-$('helpBtn').onclick=()=>$('instructions').showModal();
-$('closeHelp').onclick=$('begin').onclick=()=>$('instructions').close();
-$('restart').onclick=()=>{
- for(const l of layers){l.context.clearRect(0,0,W,H);l.context.drawImage(l.source,0,0);l.pixels=l.context.getImageData(0,0,W,H).data;l.dirty=false}
- particles.length=0;charges.clear();energy=harvest=taint=0;updateHud();
-};
-function gather(dt){
- if(!hold)return;
- const x=hand.x+cam,y=hand.y;
- for(let i=0,n=Math.max(5,Math.round(dt*.85));i<n;i++){
- const a=Math.random()*Math.PI*2,r=Math.sqrt(Math.random())*9,px=Math.round(x+Math.cos(a)*r),py=Math.round(y+Math.sin(a)*r),k=topPixel(px,py);
- if(k<0)continue;
- const key=k*W*H+py*W+px;if(!charges.has(key))charges.set(key,{x:px,y:py,k,phase:0});
- }
-}
-function charged(dt){
- for(const [key,p] of charges){
- p.phase+=dt*(.0035+.001*Math.random());
- if(p.phase>=1){
- const l=layers[p.k],i=(p.y*W+p.x)*4;
- if(l.pixels[i+3]){
- l.pixels[i+3]=0;l.dirty=true;harvest++;
- const poisoned=p.k===2&&overTaint(p.x,p.y);
- if(poisoned)taint=clamp(taint+1.2,0,100);
- particles.push({x:p.x,y:p.y,vx:(Math.random()-.5)*.36,vy:-.18-Math.random()*.4,life:0,poisoned});
- }
- charges.delete(key);
- }
- }
-}
-function floatPixels(dt){
- const tx=hand.x+cam,ty=hand.y;
- for(let i=particles.length-1;i>=0;i--){
- const p=particles[i],dx=tx-p.x,dy=ty-p.y,d=Math.hypot(dx,dy)||1;
- const accel=clamp(1.2/(d+8),.003,.075)*dt*.15;
- p.vx=p.vx*.982+dx/d*accel;p.vy=p.vy*.982+dy/d*accel;
- p.x+=p.vx*dt*.07;p.y+=p.vy*dt*.07;p.life+=dt;
- if((d<5&&hover)||p.life>3800){if(d<10&&!p.poisoned)energy++;particles.splice(i,1)}
- }
-}
-function updateHud(){
- $('essence').textContent=String(energy).padStart(5,'0');
- $('harvest').textContent=harvest+' PIXELS HARVESTED';
- $('healthBar').style.width=(100-taint)+'%';
- $('status').textContent=taint>55?'CORRUPTION CRITICAL':taint>8?'TAINT DETECTED':'EXTRACTION READY';
-}
-function drawHand(){
- if(!hover&&!hold)return;
- const x=Math.round(hand.x),y=Math.round(hand.y);g.save();g.translate(x,y);g.shadowBlur=hold?9:4;g.shadowColor='#ab37ed';
- g.fillStyle='#14221b';g.fillRect(4,12,9,12);g.fillRect(-7,6,15,11);
- g.fillStyle='#536c61';g.fillRect(-7,7,14,9);g.fillRect(-3,1,9,12);g.fillRect(3,13,9,10);
- g.fillStyle='#acc1a8';g.fillRect(-6,4,11,4);g.fillRect(-4,0,8,4);
- for(let f=0;f<4;f++){const px=-7+f*4,py=-2-Math.abs(f-1.5)*1.8;
- g.fillStyle='#536c61';g.fillRect(px,py-9,3,9);g.fillStyle='#acc1a8';g.fillRect(px,py-10,2,7);
- g.fillStyle=hold?'#da71fa':'#819d90';g.fillRect(px,py-11,2,2)}
- g.fillStyle='#8d45b6';g.fillRect(-8,-2,3,5);
- if(hold){g.strokeStyle='#c454ff';g.lineWidth=1;g.beginPath();g.arc(0,-1,10+Math.sin(t*.009)*.6,0,Math.PI*2);g.stroke();
- for(let i=0;i<5;i++){let a=t*.003+i*1.256;g.fillStyle=i%2?'#e3afff':'#aa37ef';g.fillRect(Math.cos(a)*13|0,Math.sin(a)*13-2|0,2,2)}}
- g.restore();
-}
-function render(){
- g.clearRect(0,0,VW,H);g.drawImage(background,-Math.round(cam),0);
- for(let k=layers.length-1;k>=0;k--)g.drawImage(layers[k].canvas,-Math.round(cam),0);
- if(topPixel(188,128)===2){g.globalAlpha=.65+.25*Math.sin(t*.006);g.fillStyle='#a32670';g.fillRect(187-cam,128,3,2);g.fillRect(182-cam,125,2,2);g.fillRect(193-cam,126,2,2);g.globalAlpha=1}
- for(const p of charges.values()){let x=Math.round(p.x-cam);if(x<0||x>=VW)continue;
- g.fillStyle=p.phase>.6?'#f2b8ff':p.phase>.22?'#d953ff':'#9b2ae4';g.fillRect(x,p.y,1,1);
- if(p.phase>.65){g.fillStyle='#cd36ff44';g.fillRect(x-1,p.y-1,3,3)}}
- for(const p of particles){let x=p.x-cam;if(x<-5||x>VW+5)continue;
- g.fillStyle=p.poisoned?'#f4378d':'#6821a6';g.fillRect(Math.round(x),Math.round(p.y),1,1);
- if(Math.random()<.25){g.fillStyle='#8e2ecd';g.fillRect(Math.round(x-p.vx*3),Math.round(p.y-p.vy*3),1,1)}}
- for(const m of dust){g.fillStyle='#80df7c';g.globalAlpha=.1+.12*Math.sin(t*.001+m.p);g.fillRect(Math.round(m.x-cam*.25),Math.round(m.y),1,1)}
- g.globalAlpha=1;drawHand();
-}
-function frame(now){
- const dt=Math.min(40,now-previous);previous=now;t+=dt;
- wantCam=clamp(wantCam+pan*dt*.09,0,W-VW);cam+=(wantCam-cam)*Math.min(1,dt*.016);
- gather(dt);charged(dt);
- for(const l of layers)if(l.dirty){l.context.putImageData(new ImageData(new Uint8ClampedArray(l.pixels),W,H),0,0);l.dirty=false}
- floatPixels(dt);updateHud();$('position').style.left=((cam/(W-VW))*92)+'%';
- if(hold){const k=topPixel(hand.x+cam,hand.y);if(k>=0)$('layerName').textContent=names[k]}
- render();requestAnimationFrame(frame);
-}
-init();
+  'use strict';
+
+  // All original PNGs share one pixel grid. The camera moves; the images never do.
+  const W = 364, H = 204, VW = 236, PIXELS = W * H;
+  const NAMES = ['OUTER FLESH', 'FUNERAL CLOTH', 'DRIED REMAINS', 'ANCIENT BONES'];
+  const FILES = ['Coprse01_alive.png', 'Coprse02_Cloth.png', 'Coprse03_Dried.png', 'Coprse04_Skeleton.png'];
+  const $ = id => document.getElementById(id);
+  const canvas = $('game'), g = canvas.getContext('2d', { alpha: false });
+  g.imageSmoothingEnabled = false;
+  const clamp = (v, low, high) => Math.max(low, Math.min(high, v));
+  const layers = [], charges = new Map(), particles = [], debris = [], dust = [];
+    const visited = new Uint32Array(PIXELS), queue = new Int32Array(PIXELS);
+  let visitGeneration = 0, chunkId = 0, ground = new Int16Array(W);
+  let background, cam = 0, wantCam = 0, hand = { x: VW / 2, y: 120 };
+  let hold = false, hover = false, pan = 0, energy = 0, harvest = 0, taint = 0;
+  let nowTime = 0, previous = performance.now(), connectivityClock = 0, needConnectivity = new Set();
+  let loaded = false;
+
+  function load(url) {
+    return new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error(url));
+      im.src = url;
+    });
+  }
+
+  function createCanvas(w, h) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    return c;
+  }
+
+  function makeLayer(image) {
+    const surface = createCanvas(W, H);
+    const context = surface.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, W, H).data;
+    const original = new Uint8Array(PIXELS);
+    let remaining = 0;
+    for (let n = 0; n < PIXELS; n++) {
+      // These PNGs have binary alpha; keep the original artwork's RGBA values.
+      if (pixels[n * 4 + 3] > 24) { original[n] = 1; remaining++; }
+    }
+    return { surface, context, pixels, original, absorbed: new Uint8Array(PIXELS), image, remaining, unabsorbed: remaining, dirty: false };
+  }
+
+  // The skeleton's original bottommost pixel at each X defines a permanent
+  // support surface. Use the nearest bone column for transparent gaps.
+  function buildGround() {
+    const bone = layers[3].original;
+    for (let x = 0; x < W; x++) {
+      let bottom = -1;
+      for (let y = H - 1; y >= 0; y--) {
+        if (bone[y * W + x]) { bottom = y; break; }
+      }
+      ground[x] = bottom;
+    }
+    for (let x = 0; x < W; x++) {
+      if (ground[x] >= 0) continue;
+      let a = x - 1, b = x + 1;
+      while (a >= 0 && ground[a] < 0) a--;
+      while (b < W && ground[b] < 0) b++;
+      ground[x] = a < 0 ? (b < W ? ground[b] : 158)
+        : b >= W ? ground[a] : (x - a <= b - x ? ground[a] : ground[b]);
+    }
+  }
+
+  async function init() {
+    try {
+      const imgs = await Promise.all(['assets/Coprse_BG.png', ...FILES.map(f => 'assets/' + f)].map(load));
+      background = imgs[0];
+      for (let i = 1; i < imgs.length; i++) layers.push(makeLayer(imgs[i]));
+      buildGround();
+      for (let i = 0; i < 42; i++) dust.push({ x: Math.random() * W, y: Math.random() * H, p: Math.random() * 6 });
+      loaded = true;
+      $('loading').style.opacity = '0';
+      setTimeout(() => $('loading')?.remove(), 600);
+      requestAnimationFrame(frame);
+    } catch (err) {
+      $('loading').textContent = 'ASSET ERROR: ' + err.message;
+      console.error(err);
+    }
+  }
+
+  function boneUnlocked() {
+    // Falling debris and purple particles still need to reach the hand.
+    return layers.length === 4 && layers[0].unabsorbed === 0 &&
+      layers[1].unabsorbed === 0 && layers[2].unabsorbed === 0;
+  }
+  function remainingBeforeBone() {
+    return layers.slice(0, 3).reduce((sum, l) => sum + l.unabsorbed, 0);
+  }
+
+  // Each deeper pixel requires nearby ABOVE-layer pixels to have been
+  // substantially absorbed. The local original coverage is the denominator:
+  // naturally bare areas (e.g. the head has no cloth) don't need fake cloth
+  // removal, and clearing a distant limb cannot unlock tissue here.
+  function locallyClear(k, x, y) {
+    if (k === 0) return true;
+    if (k === 3) return boneUnlocked(); // skeleton is a global final stage
+    for (let above = 0; above < k; above++) {
+      const l = layers[above];
+      const radius = above === 0 ? 8 : 6;
+      let original = 0, present = 0;
+      const minY = Math.max(0, y - radius), maxY = Math.min(H - 1, y + radius);
+      const minX = Math.max(0, x - radius), maxX = Math.min(W - 1, x + radius);
+      const rr = radius * radius;
+      for (let yy = minY; yy <= maxY; yy++) {
+        const dy2 = (yy - y) * (yy - y);
+        for (let xx = minX; xx <= maxX; xx++) {
+          if ((xx - x) * (xx - x) + dy2 > rr) continue;
+          const n = yy * W + xx;
+          if (l.original[n]) {
+            original++;
+            if (!l.absorbed[n]) present++;
+          }
+        }
+      }
+      if (original >= 4 && present > original * 0.16) return false;
+    }
+    return true;
+  }
+
+  function topPixel(x, y) {
+    x = Math.round(x); y = Math.round(y);
+    if (x < 0 || y < 0 || x >= W || y >= H) return -1;
+    const alpha = (y * W + x) * 4 + 3;
+    for (let k = 0; k < 4; k++) if (layers[k].pixels[alpha] > 24) return k;
+    return -1;
+  }
+
+  function materialAt(x, y) {
+    x = Math.round(x); y = Math.round(y);
+    if (x < 0 || y < 0 || x >= W || y >= H) return null;
+    // Disconnected pieces are on top of the corpse and can be harvested
+    // individually, even after they've landed on the bone-shaped ground.
+    for (let i = debris.length - 1; i >= 0; i--) {
+      const d = debris[i];
+      const rx = Math.round(x - d.x), ry = Math.round(y - d.y);
+      if (rx < 0 || ry < 0 || rx >= d.w || ry >= d.h) continue;
+      if (d.pixels[(ry * d.w + rx) * 4 + 3] > 24)
+        return { k: d.layer, x: rx, y: ry, chunk: d, worldX: x, worldY: y };
+    }
+    const k = topPixel(x, y);
+    if (k < 0 || !locallyClear(k, x, y)) return null;
+    return { k, x, y, chunk: null, worldX: x, worldY: y };
+  }
+
+  function pointer(e) {
+    const r = canvas.getBoundingClientRect(), ar = VW / H, bar = r.width / r.height;
+    let x, y;
+    if (bar > ar) {
+      const w = r.height * ar;
+      x = (e.clientX - r.left - (r.width - w) / 2) / w * VW;
+      y = (e.clientY - r.top) / r.height * H;
+    } else {
+      const h = r.width / ar;
+      x = (e.clientX - r.left) / r.width * VW;
+      y = (e.clientY - r.top - (r.height - h) / 2) / h * H;
+    }
+    hand = { x: clamp(x, 0, VW), y: clamp(y, 0, H) };
+    hover = true;
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+    pointer(e); hold = true; $('hint').style.opacity = 0;
+  });
+  canvas.addEventListener('pointermove', pointer);
+  canvas.addEventListener('pointerenter', () => hover = true);
+  canvas.addEventListener('pointerleave', () => { if (!hold) hover = false; });
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'])
+    canvas.addEventListener(event, () => hold = false);
+  for (const [id, dir] of [['panLeft', -1], ['panRight', 1]]) {
+    const b = $(id);
+    b.addEventListener('pointerdown', e => { e.preventDefault(); b.setPointerCapture(e.pointerId); pan = dir; });
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'])
+      b.addEventListener(event, () => pan = 0);
+    b.addEventListener('click', () => wantCam = clamp(wantCam + dir * 40, 0, W - VW));
+  }
+  addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      pan = e.key === 'ArrowLeft' ? -1 : 1; e.preventDefault();
+    }
+  });
+  addEventListener('keyup', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') pan = 0; });
+  $('helpBtn').onclick = () => $('instructions').showModal();
+  $('closeHelp').onclick = $('begin').onclick = () => $('instructions').close();
+
+  function reset() {
+    if (!loaded) return;
+    for (const l of layers) {
+      l.context.clearRect(0, 0, W, H);
+      l.context.drawImage(l.image, 0, 0);
+      l.pixels = l.context.getImageData(0, 0, W, H).data;
+      l.remaining = l.unabsorbed = l.original.reduce((s, v) => s + v, 0);
+      l.absorbed.fill(0);
+      l.dirty = false;
+    }
+    particles.length = 0; debris.length = 0; charges.clear();
+    needConnectivity.clear(); connectivityClock = 0;
+    energy = harvest = taint = 0; cam = wantCam = 0;
+    updateHud();
+  }
+  $('restart').onclick = reset;
+
+  function tainted(x, y, k) {
+    return k === 2 && ((x - 188) / 17) ** 2 + ((y - 128) / 8) ** 2 < 1;
+  }
+
+  function chargeKey(m) {
+    return m.chunk ? `d${m.chunk.id}:${m.y * m.chunk.w + m.x}` : `l${m.k}:${m.y * W + m.x}`;
+  }
+
+  function gather(dt) {
+    if (!hold || !loaded) return;
+    const cx = hand.x + cam, cy = hand.y;
+    const count = Math.max(9, Math.round(dt * 1.35));
+    for (let n = 0; n < count; n++) {
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 9;
+      const m = materialAt(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      if (!m) continue;
+      const key = chargeKey(m);
+      if (!charges.has(key)) charges.set(key, { ...m, phase: 0 });
+    }
+  }
+
+  function chargePosition(p) {
+    return p.chunk ? { x: Math.round(p.chunk.x + p.x), y: Math.round(p.chunk.y + p.y) }
+      : { x: p.x, y: p.y };
+  }
+
+  function extractCharged(dt) {
+    for (const [key, p] of charges) {
+      const world = chargePosition(p);
+      const layer = layers[p.k];
+      const index = p.chunk ? (p.y * p.chunk.w + p.x) * 4 : (p.y * W + p.x) * 4;
+      const pixels = p.chunk ? p.chunk.pixels : layer.pixels;
+      if (pixels[index + 3] < 25 || (!p.chunk && (topPixel(p.x, p.y) !== p.k || !locallyClear(p.k, p.x, p.y)))) {
+        charges.delete(key); continue;
+      }
+      const distance = Math.hypot(world.x - hand.x - cam, world.y - hand.y);
+      if (!hold || distance > 14) {
+        p.phase -= dt * .008;
+        if (p.phase <= 0) charges.delete(key);
+        continue;
+      }
+      p.phase += dt * (.005 + .001 * Math.random());
+      if (p.phase < 1) continue;
+      pixels[index + 3] = 0;
+      if (p.chunk) {
+        p.chunk.remaining--;
+        p.chunk.dirty = true;
+        p.chunk.profileDirty = true;
+      } else {
+        layer.remaining--;
+        layer.dirty = true;
+        needConnectivity.add(p.k);
+      }
+      particles.push({ x: world.x, y: world.y, vx: (Math.random() - .5) * 1.2,
+        vy: -1 - Math.random(), k: p.k, sourceN: p.chunk
+          ? (p.chunk.sourceY + p.y) * W + (p.chunk.sourceX + p.x)
+          : p.y * W + p.x, poisoned: tainted(world.x, world.y, p.k) });
+      if (tainted(world.x, world.y, p.k)) taint = clamp(taint + 1.2, 0, 100);
+      charges.delete(key);
+    }
+  }
+
+  // 8-neighbour flood fill: diagonally connected pixel art remains joined.
+  // Only components severed from the largest surviving body component fall.
+  // A severed connected island becomes a SINGLE rigid falling sprite instead
+  // of artificially dissolving all its pixels into unrelated particles.
+  function detachIslands(k) {
+    const l = layers[k];
+    const comps = [];
+    const generation = ++visitGeneration;
+    for (let start = 0; start < PIXELS; start++) {
+      if (l.pixels[start * 4 + 3] < 25 || visited[start] === generation) continue;
+      const cells = [];
+      let head = 0, tail = 1; queue[0] = start; visited[start] = generation;
+      while (head < tail) {
+        const current = queue[head++], cx = current % W, cy = (current / W) | 0;
+        cells.push(current);
+        for (let y = Math.max(0, cy - 1); y <= Math.min(H - 1, cy + 1); y++) {
+          for (let x = Math.max(0, cx - 1); x <= Math.min(W - 1, cx + 1); x++) {
+            const next = y * W + x;
+            if (next === current || visited[next] === generation || l.pixels[next * 4 + 3] < 25) continue;
+            visited[next] = generation; queue[tail++] = next;
+          }
+        }
+      }
+      comps.push(cells);
+    }
+    if (comps.length <= 1) return;
+    comps.sort((a, b) => b.length - a.length);
+    // Avoid a single pre-existing anti-aliasing island suddenly dropping merely
+    // because a completely different part of the body was harvested.
+    for (let i = 1; i < comps.length; i++) {
+      const cells = comps[i];
+      if (cells.length < 4 && cells.every(n => isolatedOriginal[k]?.has(n))) continue;
+      makeDebris(k, cells);
+    }
+  }
+
+  const isolatedOriginal = [];
+  function rememberOriginalIslands() {
+    // The supplied cloth art has three independent single-pixel marks.
+    // Preserve them until touched. They aren't newly severed fragments.
+    for (let k = 0; k < 4; k++) {
+      const l = layers[k], seen = new Uint8Array(PIXELS), singles = new Set();
+      for (let n = 0; n < PIXELS; n++) {
+        if (!l.original[n] || seen[n]) continue;
+        let head = 0, tail = 1; queue[0] = n; seen[n] = 1;
+        const cells = [];
+        while (head < tail) {
+          const at = queue[head++], x = at % W, y = (at / W) | 0; cells.push(at);
+          for (let yy = Math.max(0, y - 1); yy <= Math.min(H - 1, y + 1); yy++)
+            for (let xx = Math.max(0, x - 1); xx <= Math.min(W - 1, x + 1); xx++) {
+              const next = yy * W + xx;
+              if (l.original[next] && !seen[next]) { seen[next] = 1; queue[tail++] = next; }
+            }
+        }
+        if (cells.length < 4) for (const c of cells) singles.add(c);
+      }
+      isolatedOriginal[k] = singles;
+    }
+  }
+
+  function makeDebris(k, cells) {
+    let minX = W, minY = H, maxX = 0, maxY = 0;
+    for (const n of cells) {
+      const x = n % W, y = (n / W) | 0;
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+    }
+    const w = maxX - minX + 1, h = maxY - minY + 1;
+    const surface = createCanvas(w, h), context = surface.getContext('2d');
+    const data = context.createImageData(w, h), src = layers[k].pixels;
+    for (const n of cells) {
+      const x = n % W - minX, y = ((n / W) | 0) - minY;
+      const to = (y * w + x) * 4, from = n * 4;
+      for (let c = 0; c < 4; c++) data.data[to + c] = src[from + c];
+      src[from + 3] = 0;
+    }
+    const d = { id: ++chunkId, layer: k, x: minX, y: minY, sourceX: minX, sourceY: minY, w, h, surface, context,
+      pixels: data.data, remaining: cells.length, vx: (Math.random() - .5) * 4,
+      vy: 0, settled: false, dirty: true, profileDirty: true, profile: [] };
+    debris.push(d);
+    layers[k].remaining -= cells.length;
+    layers[k].dirty = true;
+  }
+
+  function refreshProfile(d) {
+    d.profile = new Int16Array(d.w).fill(-1);
+    for (let x = 0; x < d.w; x++) {
+      for (let y = d.h - 1; y >= 0; y--) {
+        if (d.pixels[(y * d.w + x) * 4 + 3] > 24) { d.profile[x] = y; break; }
+      }
+    }
+    d.profileDirty = false;
+  }
+
+  function floorLimit(d) {
+    let maxY = H - d.h;
+    // Each occupied column of a rigid piece must remain above the skeleton's
+    // height field. Prevents a long bone/cloth fragment from tunnelling in.
+    maxY = H;
+    for (let x = 0; x < d.w; x++) {
+      if (d.profile[x] < 0) continue;
+      const worldX = clamp(Math.round(d.x) + x, 0, W - 1);
+      maxY = Math.min(maxY, ground[worldX] - d.profile[x] - 1);
+    }
+    return maxY;
+  }
+
+  function moveDebris(dt) {
+    const seconds = dt / 1000;
+    for (let i = debris.length - 1; i >= 0; i--) {
+      const d = debris[i];
+      if (!d.remaining) { debris.splice(i, 1); continue; }
+      if (d.profileDirty) refreshProfile(d);
+      if (d.dirty) {
+        d.context.putImageData(new ImageData(new Uint8ClampedArray(d.pixels), d.w, d.h), 0, 0);
+        d.dirty = false;
+      }
+      if (d.settled) continue;
+      d.vy = Math.min(d.vy + 240 * seconds, 155);
+      d.x = clamp(d.x + d.vx * seconds, 0, W - d.w);
+      d.y += d.vy * seconds;
+      const floor = floorLimit(d);
+      if (d.y >= floor) {
+        d.y = floor; d.vy = 0; d.vx = 0; d.settled = true;
+      }
+    }
+  }
+
+  function moveParticles(dt) {
+    const step = clamp(dt / 16.667, 0, 2.5), tx = hand.x + cam, ty = hand.y;
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i], dx = tx - p.x, dy = ty - p.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance < 4) {
+        layers[p.k].unabsorbed--;
+        layers[p.k].absorbed[p.sourceN] = 1;
+        harvest++;
+        if (!p.poisoned) energy++;
+        particles.splice(i, 1);
+        continue;
+      }
+      const accel = .19 + Math.min(1.4, 15 / (distance + 5));
+      p.vx = p.vx * Math.pow(.90, step) + dx / distance * accel * step;
+      p.vy = p.vy * Math.pow(.90, step) + dy / distance * accel * step;
+      p.x += p.vx * step; p.y += p.vy * step;
+    }
+  }
+
+  function updateHud() {
+    $('essence').textContent = String(energy).padStart(5, '0');
+    $('harvest').textContent = `${harvest} PIXELS ABSORBED`;
+    $('healthBar').style.width = (100 - taint) + '%';
+    const left = remainingBeforeBone();
+    $('status').textContent = taint > 55 ? 'CORRUPTION CRITICAL'
+      : taint > 8 ? 'TAINT DETECTED'
+      : left ? `BONES SEALED · ${left.toLocaleString('en-US')} LEFT` : 'BONES UNBOUND · FINAL HARVEST';
+  }
+
+  function drawHand() {
+    if (!hover && !hold) return;
+    const x = Math.round(hand.x), y = Math.round(hand.y);
+    g.save(); g.translate(x, y); g.shadowBlur = hold ? 9 : 4; g.shadowColor = '#ab37ed';
+    g.fillStyle = '#14221b'; g.fillRect(4, 12, 9, 12); g.fillRect(-7, 6, 15, 11);
+    g.fillStyle = '#536c61'; g.fillRect(-7, 7, 14, 9); g.fillRect(-3, 1, 9, 12); g.fillRect(3, 13, 9, 10);
+    g.fillStyle = '#acc1a8'; g.fillRect(-6, 4, 11, 4); g.fillRect(-4, 0, 8, 4);
+    for (let f = 0; f < 4; f++) {
+      const px = -7 + f * 4, py = -2 - Math.abs(f - 1.5) * 1.8;
+      g.fillStyle = '#536c61'; g.fillRect(px, py - 9, 3, 9);
+      g.fillStyle = '#acc1a8'; g.fillRect(px, py - 10, 2, 7);
+      g.fillStyle = hold ? '#da71fa' : '#819d90'; g.fillRect(px, py - 11, 2, 2);
+    }
+    g.fillStyle = '#8d45b6'; g.fillRect(-8, -2, 3, 5);
+    if (hold) {
+      g.strokeStyle = '#c454ff'; g.lineWidth = 1; g.beginPath();
+      g.arc(0, -1, 10 + Math.sin(nowTime * .009) * .6, 0, Math.PI * 2); g.stroke();
+      for (let i = 0; i < 5; i++) {
+        const a = nowTime * .003 + i * 1.256;
+        g.fillStyle = i % 2 ? '#e3afff' : '#aa37ef';
+        g.fillRect(Math.cos(a) * 13 | 0, Math.sin(a) * 13 - 2 | 0, 2, 2);
+      }
+    }
+    g.restore();
+  }
+
+  function render() {
+    g.clearRect(0, 0, VW, H);
+    g.drawImage(background, -Math.round(cam), 0);
+    for (let k = 3; k >= 0; k--) g.drawImage(layers[k].surface, -Math.round(cam), 0);
+    if (topPixel(188, 128) === 2) {
+      g.globalAlpha = .65 + .25 * Math.sin(nowTime * .006);
+      g.fillStyle = '#a32670';
+      g.fillRect(187 - cam, 128, 3, 2); g.fillRect(182 - cam, 125, 2, 2);
+      g.fillRect(193 - cam, 126, 2, 2); g.globalAlpha = 1;
+    }
+    for (const d of debris) {
+      if (d.x - cam > VW || d.x + d.w < cam) continue;
+      g.drawImage(d.surface, Math.round(d.x - cam), Math.round(d.y));
+    }
+    for (const p of charges.values()) {
+      const at = chargePosition(p), x = Math.round(at.x - cam);
+      if (x < 0 || x >= VW) continue;
+      g.fillStyle = p.phase > .6 ? '#f2b8ff' : p.phase > .22 ? '#d953ff' : '#a937ef';
+      g.fillRect(x, at.y, 1, 1);
+      if (p.phase > .65) {
+        g.fillStyle = '#cd36ff44'; g.fillRect(x - 1, at.y - 1, 3, 3);
+      }
+    }
+    for (const p of particles) {
+      const x = p.x - cam;
+      if (x < -5 || x > VW + 5) continue;
+      g.fillStyle = p.poisoned ? '#f4378d' : '#6821a6';
+      g.fillRect(Math.round(x), Math.round(p.y), 1, 1);
+    }
+    for (const m of dust) {
+      g.fillStyle = '#80df7c'; g.globalAlpha = .1 + .12 * Math.sin(nowTime * .001 + m.p);
+      g.fillRect(Math.round(m.x - cam * .25), Math.round(m.y), 1, 1);
+    }
+    g.globalAlpha = 1;
+    drawHand();
+  }
+
+  function frame(time) {
+    const dt = Math.min(40, time - previous); previous = time; nowTime += dt;
+    wantCam = clamp(wantCam + pan * dt * .09, 0, W - VW);
+    cam += (wantCam - cam) * Math.min(1, dt * .016);
+    gather(dt);
+    extractCharged(dt);
+    // Expensive connectivity checks are coalesced, not run for every pixel.
+    connectivityClock += dt;
+    if (connectivityClock >= 115 && needConnectivity.size) {
+      for (const k of needConnectivity) detachIslands(k);
+      needConnectivity.clear(); connectivityClock = 0;
+    }
+    for (const l of layers) {
+      if (!l.dirty) continue;
+      l.context.putImageData(new ImageData(new Uint8ClampedArray(l.pixels), W, H), 0, 0);
+      l.dirty = false;
+    }
+    moveDebris(dt);
+    moveParticles(dt);
+    updateHud();
+    $('position').style.left = ((cam / (W - VW)) * 92) + '%';
+    if (hold) {
+      const worldX = Math.round(hand.x + cam), worldY = Math.round(hand.y);
+      const k = topPixel(worldX, worldY);
+      $('layerName').textContent = k === 3 && !boneUnlocked()
+        ? 'ANCIENT BONES · SEALED' : k >= 0 ? NAMES[k] : 'DETACHED MATTER';
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // Small diagnostic hook for automated regression tests; not a gameplay cheat.
+  if (new URLSearchParams(location.search).has('debug')) {
+    window.__DECOMPOSE_DEBUG__ = {
+      get ready() { return loaded; }, get layers() { return layers; }, get debris() { return debris; },
+      get ground() { return ground; }, get particles() { return particles; },
+      locallyClear, topPixel, materialAt, boneUnlocked, detachIslands,
+      get camera() { return cam; }
+    };
+  }
+  init().then(() => { if (loaded) rememberOriginalIslands(); });
 })();
