@@ -13,7 +13,7 @@ Hold and drag to remove individual pixels from a corpse. An **invisible 150-pixe
 - Cloth only needs to be removed **where it actually covers** dried remains.
 - The **skeleton cannot be harvested at all** until **every flesh, cloth, and dried-remains pixel has actually been absorbed**, including detached chunks and free-floating suction particles.
 - After extraction, **8-neighbor connectivity** determines which sections fall. Detached sections fall under gravity, progressively turn violet, shed individual pixels into turbulent purple flame, and chip apart further when they strike the ground. The surviving connected piece can still be harvested after landing.
-- Falling pieces collide with a **height field derived from the original bottommost skeleton pixel at each X coordinate**. Gaps use the nearest defined height. If a piece starts inside the height field, it uses the bottom of the scene as a safe fallback instead of teleporting upward. Collision never pushes a piece upward. The collider remains in place during the final harvest.
+- Falling pieces land on **one fixed horizontal collision line**, taken from the lowest non-transparent row anywhere in the original `Coprse04_Skeleton.png` (row **158**, zero-indexed, in the supplied 364×204 asset). This is NOT a per-column height field or the bottom of the screen. If a fragment already overlaps the baseline when disconnected, it settles where it is rather than jumping upward or dropping below it. The baseline persists during final skeleton extraction.
 - All shattered/evaporated pixels remain individually accounted for and count as harvested **only after reaching the hand**; breaking pieces cannot unlock deeper tissue for free.
 - The background never changes.
 
